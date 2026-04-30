@@ -1,0 +1,294 @@
+"""FastMCP entrypoint. Registers v0.2 tools with namespaced names.
+
+Hard-cut migration: this server replaces the v0.1 `youtube` MCP entry. Tool names
+are intentionally NOT backwards-compatible — the LLM should learn the new namespace.
+
+Loads YOUTUBE_API_KEY from a project-local .env if present (BYO key — file is
+gitignored). The Claude config env block also works and takes precedence.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any, Literal
+
+from dotenv import load_dotenv
+
+# Load .env from the project root (the dir containing pyproject.toml).
+# override=False so an explicit env var from Claude config wins.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
+
+from mcp.server.fastmcp import FastMCP
+
+from .tools.inspect import inspect_video as _inspect_video
+from .tools.transcript import transcript_get as _transcript_get
+from .tools.scrape import scrape_search as _scrape_search
+from .tools.skeleton_tools import (
+    skeleton_build as _skeleton_build,
+    skeleton_list as _skeleton_list,
+    skeleton_get as _skeleton_get,
+    skeleton_expire as _skeleton_expire,
+    skeleton_index as _skeleton_index,
+)
+from .tools.frame import frame_get as _frame_get
+from .tools.api import (
+    api_search as _api_search,
+    api_channel_stats as _api_channel_stats,
+    api_trending as _api_trending,
+    api_video_categories as _api_video_categories,
+)
+
+log = logging.getLogger("youtube-mcp-v2")
+logging.basicConfig(level=logging.INFO)
+
+mcp = FastMCP("YouTube v0.2")
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — pre-flight
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="inspect.video")
+def tool_inspect_video(url_or_id: str) -> dict[str, Any]:
+    """Pre-flight check on a YouTube video.
+
+    USE WHEN: you have a URL/id and need capabilities (transcript? language?
+    duration? age-gated?) before deciding which heavy tool to call next.
+    DO NOT USE WHEN: you've already inspected this id this session.
+    OUTPUT SHAPE: envelope wrapping { id, title, channel, duration_s, view_count,
+                  publish_date, lang_default, available_caption_langs[],
+                  has_transcript, age_gated, embed_allowed, livestream }.
+    """
+    return _inspect_video(url_or_id)
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — transcripts
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="transcript.get")
+def tool_transcript_get(
+    url_or_id: str,
+    mode: Literal["text", "timed", "chunked"] = "text",
+    lang: str = "en",
+    cursor: str | None = None,
+    chunk_tokens: int = 500,
+    chunk_overlap: int = 50,
+) -> dict[str, Any]:
+    """Fetch a YouTube transcript in one of three shapes.
+
+    USE WHEN mode='text': consumer just needs the words, no timing.
+    USE WHEN mode='timed': consumer needs timestamps (jump to a moment, cut clips).
+    USE WHEN mode='chunked': long transcript that won't fit a single LLM call.
+    DO NOT USE: when you don't yet have a video id — call inspect.video first.
+    OUTPUT SHAPE: depends on mode. text → {text, word_count}; timed → {segments,
+                  next_cursor}; chunked → {chunks: [{i, n, start_s, end_s, text,
+                  token_estimate}]}.
+    """
+    return _transcript_get(
+        url_or_id,
+        mode=mode,
+        lang=lang,
+        cursor=cursor,
+        chunk_tokens=chunk_tokens,
+        chunk_overlap=chunk_overlap,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — search (no key)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="scrape.search")
+def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
+    """Search YouTube via page scraping. No API key needed.
+
+    USE WHEN: discovering videos by topic without a YOUTUBE_API_KEY.
+    DO NOT USE WHEN: YOUTUBE_API_KEY is set — call api.search instead for richer
+                     fields (channel ids, dates, no rate-limit quirks).
+    OUTPUT SHAPE: envelope wrapping list of {id, title, channel, channel_id,
+                  duration, views, published, url}.
+    """
+    return _scrape_search(query, n)
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — skeletons (frozen reference objects)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="skeleton.build")
+def tool_skeleton_build(
+    target: Literal["channel", "topic"],
+    value: str,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Build a frozen reference of videos for a channel or topic.
+
+    USE WHEN target='channel': stable list of a creator's recent uploads to fan
+                               downstream calls (transcripts, frames) against.
+    USE WHEN target='topic':   frozen snapshot of search results for later
+                               comparison or v0.3 ml.search_skeleton.
+    DO NOT USE WHEN: you only need a one-shot search — call scrape.search.
+    OUTPUT SHAPE: envelope wrapping {handle, target, value, source, count}.
+                  Use skeleton.get / skeleton.list to read the contents.
+    """
+    return _skeleton_build(target, value, limit)
+
+
+@mcp.tool(name="skeleton.list")
+def tool_skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
+    """List the videos in a skeleton.
+
+    USE WHEN: iterating videos for downstream batch ops.
+    DO NOT USE WHEN: you need build provenance/channel meta — use skeleton.get.
+    OUTPUT SHAPE: envelope wrapping list of video entries; nullable fields
+                  enriched from cache when enrich=True.
+    """
+    return _skeleton_list(handle, enrich=enrich)
+
+
+@mcp.tool(name="skeleton.get")
+def tool_skeleton_get(handle: str) -> dict[str, Any]:
+    """Load the full skeleton snapshot.
+
+    USE WHEN: you need build_at / source / channel meta or the raw frozen list.
+    DO NOT USE WHEN: you only need the videos — use skeleton.list.
+    OUTPUT SHAPE: envelope wrapping the full skeleton dict.
+    """
+    return _skeleton_get(handle)
+
+
+@mcp.tool(name="skeleton.expire")
+def tool_skeleton_expire(handle: str) -> dict[str, Any]:
+    """Mark a skeleton stale. Does NOT delete (revision discipline).
+
+    USE WHEN: signalling that downstream consumers should rebuild while
+              preserving the old snapshot for diff/audit.
+    DO NOT USE WHEN: you want to discard data — build a new handle and ignore
+                     the old one instead.
+    OUTPUT SHAPE: envelope wrapping {handle, expired_at}.
+    """
+    return _skeleton_expire(handle)
+
+
+@mcp.tool(name="skeleton.index")
+def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
+    """List all skeletons on disk (summary view).
+
+    USE WHEN: discovering existing skeletons before building a new one.
+    DO NOT USE WHEN: you already know the handle.
+    OUTPUT SHAPE: envelope wrapping list of skeleton summaries.
+    """
+    return _skeleton_index(target)
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — frame extraction (yt-dlp + ffmpeg)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="frame.get")
+def tool_frame_get(
+    url_or_id: str,
+    mode: Literal["single", "sheet"] = "single",
+    timestamp_s: float | None = None,
+    n: int = 12,
+    layout: str = "4x3",
+    size: str = "1280x720",
+    fmt: Literal["png", "jpg"] = "png",
+) -> dict[str, Any]:
+    """Extract one frame or a contact sheet from a YouTube video.
+
+    USE WHEN mode='single': you need a specific moment as an image (timestamp_s
+                            required). For in-text references, captions, or
+                            feeding to a vision model.
+    USE WHEN mode='sheet':  at-a-glance view of a video (LitRPG review,
+                            scene-skimming, content audit). Returns the tiled
+                            sheet AND the individual frames.
+    DO NOT USE WHEN: you only need text — call transcript.get instead.
+                     For a full video download, this is not the right tool.
+    OUTPUT SHAPE: envelope wrapping
+                  single → {path, timestamp_s, cached}
+                  sheet  → {path, layout, frame_timestamps, frame_paths, cached}.
+    """
+    return _frame_get(
+        url_or_id, mode=mode, timestamp_s=timestamp_s,
+        n=n, layout=layout, size=size, fmt=fmt,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 — Data API v3 (BYO YOUTUBE_API_KEY)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="api.search")
+def tool_api_search(
+    query: str,
+    max_results: int = 10,
+    order: str = "relevance",
+    published_after: str | None = None,
+    channel_id: str | None = None,
+) -> dict[str, Any]:
+    """Search YouTube via the Data API v3.
+
+    USE WHEN: YOUTUBE_API_KEY is set and you want clean structured results.
+    DO NOT USE WHEN: no key — use scrape.search.
+    OUTPUT SHAPE: envelope wrapping list of {id, title, channel, channel_id,
+                  published_at, description_excerpt, url}.
+    QUOTA: 100 units per call (~100/day on free tier).
+    """
+    return _api_search(query, max_results, order, published_after, channel_id)
+
+
+@mcp.tool(name="api.channel_stats")
+def tool_api_channel_stats(channel_id_or_handle: str) -> dict[str, Any]:
+    """Channel stats — subs, total views, video count, custom URL.
+
+    USE WHEN: you need creator-size signals or canonical channel meta.
+    DO NOT USE WHEN: you only need recent uploads — use skeleton.build.
+    OUTPUT SHAPE: envelope wrapping channel record.
+    QUOTA: 1 unit.
+    """
+    return _api_channel_stats(channel_id_or_handle)
+
+
+@mcp.tool(name="api.trending")
+def tool_api_trending(
+    region: str = "US",
+    category_id: str | None = None,
+    n: int = 20,
+) -> dict[str, Any]:
+    """Trending videos for a region.
+
+    USE WHEN: you want what's currently popular for content research.
+    DO NOT USE WHEN: you have a specific topic — use api.search or scrape.search.
+    OUTPUT SHAPE: envelope wrapping list of lean video records.
+    QUOTA: 1 unit.
+    """
+    return _api_trending(region, category_id, n)
+
+
+@mcp.tool(name="api.video_categories")
+def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
+    """List YouTube category ids for a region.
+
+    USE WHEN: you need a numeric category id for filtering trending/search.
+    DO NOT USE WHEN: you don't care about category filters.
+    OUTPUT SHAPE: envelope wrapping list of {id, title}.
+    QUOTA: 1 unit.
+    """
+    return _api_video_categories(region)
+
+
+log.info(
+    "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
+    "skeleton.{build,list,get,expire,index}, frame.get | "
+    "tier-2: api.{search,channel_stats,trending,video_categories}"
+)
