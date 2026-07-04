@@ -33,6 +33,7 @@ from .tools.skeleton_tools import (
     skeleton_index as _skeleton_index,
 )
 from .tools.frame import frame_get as _frame_get
+from .tools.audio import audio_get as _audio_get
 from .tools.api import (
     api_search as _api_search,
     api_channel_stats as _api_channel_stats,
@@ -189,7 +190,7 @@ def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — frame extraction (yt-dlp + ffmpeg)
+# Tier 1 — frame/audio extraction (yt-dlp + ffmpeg)
 # ---------------------------------------------------------------------------
 
 
@@ -220,6 +221,31 @@ def tool_frame_get(
     return _frame_get(
         url_or_id, mode=mode, timestamp_s=timestamp_s,
         n=n, layout=layout, size=size, fmt=fmt,
+    )
+
+
+@mcp.tool(name="audio.get")
+def tool_audio_get(
+    url_or_id: str,
+    fmt: Literal["wav", "m4a", "mp3", "flac", "ogg"] = "wav",
+    sample_rate: int = 22050,
+    start_s: float | None = None,
+    end_s: float | None = None,
+) -> dict[str, Any]:
+    """Extract YouTube audio to a local file for downstream transcription.
+
+    USE WHEN: another tool needs a local audio path, especially Song Maker's
+              audio-to-tab path via Basic Pitch. Defaults to mono 22.05 kHz WAV.
+    DO NOT USE WHEN: you only need words — call transcript.get instead.
+    OUTPUT SHAPE: envelope wrapping {id, path, format, sample_rate, mono,
+                  start_s, end_s, cached}.
+    """
+    return _audio_get(
+        url_or_id,
+        fmt=fmt,
+        sample_rate=sample_rate,
+        start_s=start_s,
+        end_s=end_s,
     )
 
 
@@ -289,6 +315,6 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,expire,index}, frame.get | "
+    "skeleton.{build,list,get,expire,index}, frame.get, audio.get | "
     "tier-2: api.{search,channel_stats,trending,video_categories}"
 )

@@ -1,6 +1,6 @@
 # youtube-mcp-v2
 
-A YouTube MCP server with 13 tools across two tiers. Designed around a few opinions: every tool returns the same envelope, scrapes and external binaries run in subprocesses with hard timeouts, and the SQLite cache is INSERT-only so historical fetches stay queryable.
+A YouTube MCP server with 14 tools across two tiers. Designed around a few opinions: every tool returns the same envelope, scrapes and external binaries run in subprocesses with hard timeouts, and the SQLite cache is INSERT-only so historical fetches stay queryable.
 
 ## Tiers
 
@@ -11,7 +11,7 @@ A YouTube MCP server with 13 tools across two tiers. Designed around a few opini
 
 The calling LLM picks tier explicitly. One documented exception: `skeleton.build(target='channel')` upgrades from tier-1 page-scrape (~50 recent uploads) to tier-2 enumeration when an API key is present. The envelope's `source` field reports which tier ran.
 
-## Tools (13)
+## Tools (14)
 
 **Pre-flight**
 - `inspect.video(url_or_id)` — id, title, duration, channel, default language, available caption langs, age-gate flag, embed-allowed flag, livestream flag
@@ -28,6 +28,9 @@ The calling LLM picks tier explicitly. One documented exception: `skeleton.build
 
 **Frames**
 - `frame.get(url_or_id, mode='single'|'sheet', ...)` — yt-dlp downloads the video to a temp dir, ffmpeg extracts, temp file is deleted on success
+
+**Audio**
+- `audio.get(url_or_id, fmt='wav', sample_rate=22050, start_s=None, end_s=None)` — yt-dlp downloads best audio to a temp dir, ffmpeg converts it to cached mono audio for transcription tools such as Basic Pitch and Song Maker audio-to-tab
 
 **Search**
 - `scrape.search(query, n=10)` — HTML scrape of YouTube's search results page; runs in a subprocess with a 20s timeout
@@ -70,7 +73,7 @@ Skeletons live as JSON files under `~/.cache/youtube-mcp/skeletons/`. Each `skel
 
 ## Install
 
-Requires Python 3.10+ and `ffmpeg` in `PATH` (only needed for `frame.get`).
+Requires Python 3.10+ and `ffmpeg` in `PATH` (only needed for `frame.get` and `audio.get`).
 
 ```bash
 pip install git+https://github.com/dreliq9/youtube-mcp-v2.git
