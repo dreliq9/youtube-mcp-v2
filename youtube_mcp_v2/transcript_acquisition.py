@@ -57,8 +57,8 @@ class TranscriptAcquisitionFailed(RuntimeError):
         message: str,
         *,
         attempts: list[AcquisitionAttempt],
-        primary_error: BaseException | None,
-        fallback_error: BaseException | None,
+        primary_error: Exception | None,
+        fallback_error: Exception | None,
     ) -> None:
         super().__init__(message)
         self.attempts = attempts
@@ -80,7 +80,7 @@ def _elapsed_ms(started: float) -> int:
     return max(0, int((monotonic() - started) * 1000))
 
 
-def _primary_failure_detail(exc: BaseException) -> tuple[str, str]:
+def _primary_failure_detail(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, transcript_api.TranscriptsDisabled):
         return "unavailable", "transcripts_disabled"
     if isinstance(exc, transcript_api.VideoUnavailable):
@@ -90,14 +90,19 @@ def _primary_failure_detail(exc: BaseException) -> tuple[str, str]:
 
     name = type(exc).__name__.lower()
     message = str(exc).lower()
-    if "blocked" in name or "ipblock" in name or "429" in message or "too many requests" in message:
+    if (
+        "blocked" in name
+        or "ipblock" in name
+        or "429" in message
+        or "too many requests" in message
+    ):
         return "blocked", "request_blocked"
     if isinstance(exc, TimeoutError) or "timeout" in name or "timed out" in message:
         return "timeout", "timeout"
     return "error", "provider_error"
 
 
-def _fallback_failure_detail(exc: BaseException) -> tuple[str, str]:
+def _fallback_failure_detail(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, ytdlp_transcript.YtDlpUnavailable):
         return "unavailable", "missing_dependency"
     if isinstance(exc, ytdlp_transcript.YtDlpNoTranscript):
@@ -122,13 +127,13 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
     the public transcript tool contract.
     """
     attempts: list[AcquisitionAttempt] = []
-    primary_error: BaseException | None = None
-    fallback_error: BaseException | None = None
+    primary_error: Exception | None = None
+    fallback_error: Exception | None = None
 
     started = monotonic()
     try:
         fetch = transcript_api.fetch_transcript(video_id, lang=lang)
-    except BaseException as exc:
+    except Exception as exc:
         primary_error = exc
         outcome, detail = _primary_failure_detail(exc)
         attempts.append(
@@ -159,7 +164,7 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
     started = monotonic()
     try:
         fetch = ytdlp_transcript.fetch_transcript(video_id, lang=lang)
-    except BaseException as exc:
+    except Exception as exc:
         fallback_error = exc
         outcome, detail = _fallback_failure_detail(exc)
         attempts.append(
