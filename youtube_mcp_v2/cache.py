@@ -161,7 +161,7 @@ def get_transcript(
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM transcripts WHERE video_id = ? AND lang = ? "
-            "ORDER BY fetched_at DESC LIMIT 1",
+            "ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (video_id, lang),
         ).fetchone()
     if row is None:
@@ -191,7 +191,7 @@ def get_video_meta(
     with connect() as conn:
         row = conn.execute(
             "SELECT payload_json, fetched_at FROM video_meta WHERE video_id = ? "
-            "ORDER BY fetched_at DESC LIMIT 1",
+            "ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (video_id,),
         ).fetchone()
     if row is None:
@@ -240,7 +240,7 @@ def get_search_results(
     with connect() as conn:
         rows = conn.execute(
             "SELECT payload_json, fetched_at FROM search_results "
-            "WHERE query = ? ORDER BY fetched_at DESC",
+            "WHERE query = ? ORDER BY fetched_at DESC, id DESC",
             (normalized,),
         ).fetchall()
 
