@@ -28,6 +28,7 @@ from .tools.skeleton_tools import (
     skeleton_build as _skeleton_build,
     skeleton_list as _skeleton_list,
     skeleton_get as _skeleton_get,
+    skeleton_diff as _skeleton_diff,
     skeleton_expire as _skeleton_expire,
     skeleton_index as _skeleton_index,
 )
@@ -163,6 +164,19 @@ def tool_skeleton_get(handle: str) -> dict[str, Any]:
     OUTPUT SHAPE: envelope wrapping the full skeleton dict.
     """
     return _skeleton_get(handle)
+
+
+@mcp.tool(name="skeleton.diff")
+def tool_skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:
+    """Compare two frozen revisions of the same channel or topic.
+
+    USE WHEN: you captured the same research scope at two points in time and need
+              an auditable list of videos added, removed, or metadata-changed.
+    DO NOT USE WHEN: the handles represent different channels/topics.
+    OUTPUT SHAPE: envelope wrapping revision metadata, counts, added[], removed[],
+                  changed[], and whether the acquisition source changed.
+    """
+    return _skeleton_diff(base_handle, head_handle)
 
 
 @mcp.tool(name="skeleton.expire")
@@ -315,6 +329,6 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,expire,index}, frame.get, audio.get | "
+    "skeleton.{build,list,get,diff,expire,index}, frame.get, audio.get | "
     "tier-2: api.{search,channel_stats,trending,video_categories}"
 )

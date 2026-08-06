@@ -39,6 +39,14 @@ _HANDLE_RE = re.compile(
 )
 
 
+class SkeletonDiffError(ValueError):
+    """Raised when two frozen snapshots cannot be compared safely."""
+
+
+class SkeletonScopeMismatch(SkeletonDiffError):
+    """Raised when a caller tries to diff unrelated channel/topic scopes."""
+
+
 def _ensure_dirs() -> None:
     for d in (SKELETON_DIR, VECTOR_DIR, MODEL_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -138,6 +146,93 @@ def expire_skeleton(handle: str) -> dict[str, Any]:
     # membership. Write directly to the already-resolved skeleton path.
     skeleton_path(handle).write_text(json.dumps(data, indent=2), encoding="utf-8")
     return data
+
+
+# ---------------------------------------------------------------------------
+# Revision diff
+# ---------------------------------------------------------------------------
+
+
+def _index_videos(videos: list[dict[str, Any]], *, label: str) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    for i, video in enumerate(videos):
+        video_id = video.get("id")
+        if not isinstance(video_id, str) or not video_id:
+            raise SkeletonDiffError(f"{label} video at index {i} has no usable id")
+        if video_id in indexed:
+            raise SkeletonDiffError(f"{label} contains duplicate video id {video_id}")
+        indexed[video_id] = video
+    return indexed
+
+
+def diff_skeletons(base_handle: str, head_handle: str) -> dict[str, Any]:
+    """Compare two immutable snapshots of the same channel/topic scope.
+
+    The comparison operates only on the captured skeleton payloads — never on
+    current cache enrichment — so a diff remains reproducible later.
+    """
+    base = load_skeleton(base_handle)
+    head = load_skeleton(head_handle)
+
+    base_scope = (base.get("target"), base.get("value"))
+    head_scope = (head.get("target"), head.get("value"))
+    if base_scope != head_scope:
+        raise SkeletonScopeMismatch(
+            "skeleton scopes differ: "
+            f"base={base_scope!r}, head={head_scope!r}"
+        )
+
+    base_by_id = _index_videos(base.get("videos", []), label="base")
+    head_by_id = _index_videos(head.get("videos", []), label="head")
+
+    base_ids = set(base_by_id)
+    head_ids = set(head_by_id)
+    added_ids = sorted(head_ids - base_ids)
+    removed_ids = sorted(base_ids - head_ids)
+    shared_ids = sorted(base_ids & head_ids)
+
+    changed: list[dict[str, Any]] = []
+    unchanged = 0
+    for video_id in shared_ids:
+        before = base_by_id[video_id]
+        after = head_by_id[video_id]
+        changed_fields = sorted(
+            field
+            for field in (set(before) | set(after))
+            if before.get(field) != after.get(field)
+        )
+        if changed_fields:
+            changed.append({
+                "id": video_id,
+                "changed_fields": changed_fields,
+                "before": before,
+                "after": after,
+            })
+        else:
+            unchanged += 1
+
+    return {
+        "base_handle": base_handle,
+        "head_handle": head_handle,
+        "target": base.get("target"),
+        "value": base.get("value"),
+        "base_built_at": base.get("built_at"),
+        "head_built_at": head.get("built_at"),
+        "base_source": base.get("source"),
+        "head_source": head.get("source"),
+        "source_changed": base.get("source") != head.get("source"),
+        "counts": {
+            "base": len(base_by_id),
+            "head": len(head_by_id),
+            "added": len(added_ids),
+            "removed": len(removed_ids),
+            "changed": len(changed),
+            "unchanged": unchanged,
+        },
+        "added": [head_by_id[video_id] for video_id in added_ids],
+        "removed": [base_by_id[video_id] for video_id in removed_ids],
+        "changed": changed,
+    }
 
 
 # ---------------------------------------------------------------------------
