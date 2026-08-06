@@ -21,6 +21,11 @@
 - Invalid transcript modes and invalid chunk budgets now return explicit caller errors instead of silent coercion.
 - Negative timed cursors are clamped to the beginning rather than indexing from the end.
 
+### Snapshot correctness
+- Skeleton handles now include microseconds while remaining backward-compatible with legacy second-resolution handles.
+- New skeleton files use exclusive creation, so a handle collision can never silently overwrite an earlier frozen snapshot.
+- `skeleton.expire` remains the one documented in-place metadata mutation and does not alter captured membership.
+
 ### Documentation
 - Updated YouTube `search.list` quota documentation for the June 2026 granular quota model.
 - Added `ROADMAP.md` for the acquisition → corpus → semantic → multimodal → distribution sequence.
