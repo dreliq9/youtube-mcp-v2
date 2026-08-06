@@ -33,7 +33,10 @@ MODEL_DIR = CACHE_DIR / "models"        # reserved
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
-_HANDLE_RE = re.compile(r"^(chan|topic)-[A-Za-z0-9_.@-]+-\d{8}-\d{6}$")
+# Accept both legacy second-resolution handles and v0.2.1 microsecond handles.
+_HANDLE_RE = re.compile(
+    r"^(chan|topic)-[A-Za-z0-9_.@-]+-\d{8}-\d{6}(?:-\d{6})?$"
+)
 
 
 def _ensure_dirs() -> None:
@@ -46,7 +49,10 @@ def _now_iso() -> str:
 
 
 def _now_handle_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # Seconds were not sufficient: two builds of the same target inside one
+    # second could collide and write the same path. Preserve the readable time
+    # component but add microseconds. Legacy handles remain accepted by regex.
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def _slug(value: str, max_len: int = 40) -> str:
@@ -80,10 +86,15 @@ def skeleton_path(handle: str) -> Path:
 
 
 def save_skeleton(payload: dict[str, Any]) -> Path:
+    """Create a new frozen skeleton file and refuse to overwrite any existing one."""
     _ensure_dirs()
     handle = payload["handle"]
     path = skeleton_path(handle)
-    path.write_text(json.dumps(payload, indent=2))
+    encoded = json.dumps(payload, indent=2)
+    # Exclusive creation is the final guardrail even if handle generation ever
+    # regresses or two processes somehow generate an identical handle.
+    with path.open("x", encoding="utf-8") as f:
+        f.write(encoded)
     return path
 
 
@@ -117,12 +128,15 @@ def list_skeletons(target: str | None = None) -> list[dict[str, Any]]:
 
 
 def expire_skeleton(handle: str) -> dict[str, Any]:
-    """Mark a skeleton as stale. Does NOT delete the file (revision discipline)."""
+    """Mark a skeleton stale. This is the one intentional in-place metadata mutation."""
     data = load_skeleton(handle)
     if data.get("expired_at"):
         return data
     data["expired_at"] = _now_iso()
-    save_skeleton(data)
+    # `save_skeleton` is intentionally exclusive. Expiration is the documented
+    # exception: it mutates only the stale marker while preserving the captured
+    # membership. Write directly to the already-resolved skeleton path.
+    skeleton_path(handle).write_text(json.dumps(data, indent=2), encoding="utf-8")
     return data
 
 
@@ -167,8 +181,13 @@ def enrich_videos_with_meta(
             meta = json.loads(row["payload_json"])
             merged = dict(v)
             # Only fill nulls in the skeleton — never overwrite skeleton-time data.
-            for field in ("has_transcript", "lang_default", "available_caption_langs",
-                          "duration_s", "view_count"):
+            for field in (
+                "has_transcript",
+                "lang_default",
+                "available_caption_langs",
+                "duration_s",
+                "view_count",
+            ):
                 if merged.get(field) in (None, [], "") and field in meta:
                     merged[field] = meta[field]
             out.append(merged)
