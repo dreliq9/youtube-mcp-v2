@@ -1,6 +1,6 @@
 # youtube-mcp-v2
 
-A disciplined YouTube MCP for evidence-grade video research. It exposes 14 tools across two tiers and is built around frozen research sets, validated transcripts, recoverable upstream failures, media extraction, and append-only local history.
+A disciplined YouTube MCP for evidence-grade video research. It exposes 15 tools across two tiers and is built around frozen research sets, validated transcripts, recoverable upstream failures, media extraction, and append-only local history.
 
 The long-term target is not "the most YouTube API wrappers." It is a reproducible multimodal research instrument: acquire video evidence reliably, preserve provenance, freeze corpora, and let an AI retrieve the exact spoken or visual moment that supports a claim.
 
@@ -9,7 +9,7 @@ The long-term target is not "the most YouTube API wrappers." It is a reproducibl
 - **Evidence before convenience** — tools report provenance and validation state rather than silently hiding fallbacks.
 - **Frozen research sets** — skeleton handles make multi-step research reproducible and diffable.
 - **Failure containment** — fragile scrapes and external binaries run behind hard timeouts and tool-boundary error envelopes.
-- **Never overwrite history** — transcript and metadata cache writes append new revisions.
+- **Never overwrite history** — transcript and metadata cache writes append new revisions; skeleton creation refuses to overwrite an existing handle.
 - **Small public tool surface** — compound research capabilities should not require the calling model to orchestrate dozens of low-level wrappers.
 
 ## Tiers
@@ -21,7 +21,7 @@ The long-term target is not "the most YouTube API wrappers." It is a reproducibl
 
 The calling LLM picks tier explicitly. One documented exception: `skeleton.build(target='channel')` upgrades from tier-1 page scraping to tier-2 enumeration when an API key is present. The response envelope reports which source ran.
 
-## Tools (14)
+## Tools (15)
 
 **Pre-flight**
 - `inspect.video(url_or_id)` — id, title, duration, channel, caption languages, age-gate flag, embed flag, livestream flag
@@ -30,8 +30,11 @@ The calling LLM picks tier explicitly. One documented exception: `skeleton.build
 - `skeleton.build(target='channel'|'topic', value, limit=50)` — creates a new immutable research snapshot
 - `skeleton.list(handle)` — videos in the snapshot
 - `skeleton.get(handle)` — full snapshot + provenance
+- `skeleton.diff(base_handle, head_handle)` — deterministic add/remove/change comparison between two frozen revisions of the same scope
 - `skeleton.index(target=None)` — discover snapshots on disk
-- `skeleton.expire(handle)` — mark stale without deleting history
+- `skeleton.expire(handle)` — mark stale without deleting captured membership
+
+`skeleton.diff` compares only the two captured JSON snapshots. It never consults current cache enrichment, so the result remains reproducible later. It also reports when the acquisition source changed between revisions.
 
 **Transcripts**
 - `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)`
@@ -88,7 +91,7 @@ Current isolated paths include:
 
 SQLite lives at `~/.cache/youtube-mcp/v2.sqlite`. Transcript and video metadata writes are append-only; lookups select the newest matching revision. v0.2.1 performs additive schema migration for transcript provenance and does not rewrite historical rows.
 
-Skeletons live under `~/.cache/youtube-mcp/skeletons/`. Every build gets a timestamped handle. Old handles remain queryable so later corpus-diff and benchmark workflows can reproduce what the agent actually saw.
+Skeletons live under `~/.cache/youtube-mcp/skeletons/`. New handles include microseconds and files are created exclusively, so even a handle collision cannot overwrite history. Legacy second-resolution handles remain readable. Old handles remain queryable and can be compared with `skeleton.diff`.
 
 ## Install
 
@@ -131,7 +134,7 @@ Without `YOUTUBE_API_KEY`, `api.*` tools still register and return `error.code =
 
 ## Quality gates
 
-GitHub Actions runs:
+GitHub Actions is configured to run:
 - non-network unit tests on Python 3.10, 3.11, 3.12, and 3.13
 - import/package smoke tests on Linux, macOS, and Windows
 - bytecode compilation before the unit suite
@@ -156,7 +159,7 @@ See `ROADMAP.md` for acceptance criteria and `BENCHMARK.md` for the proposed pub
 
 ## Status
 
-**v0.2.1 stabilization:** MCP SDK v2 migration, packaging/CI hardening, transcript provenance, and stricter validation semantics.
+**v0.2.1 stabilization:** MCP SDK v2 migration, packaging/CI hardening, transcript provenance, strict never-overwrite skeleton creation, and reproducible skeleton revision diffing.
 
 Tier 3 (`oauth.*`, own-channel automation) remains reserved and is not a near-term product priority; creator automation is a different product axis from evidence-grade research.
 
