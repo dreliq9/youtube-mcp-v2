@@ -1,8 +1,8 @@
 """Filesystem locations shared across youtube-mcp-v2.
 
-The cache root follows the XDG Base Directory convention on Unix-like systems:
-`$XDG_CACHE_HOME/youtube-mcp` when XDG_CACHE_HOME is set, otherwise
-`~/.cache/youtube-mcp`.
+The cache root follows the XDG Base Directory convention:
+`$XDG_CACHE_HOME/youtube-mcp` when XDG_CACHE_HOME is a non-empty absolute path,
+otherwise `~/.cache/youtube-mcp`.
 
 The function form is useful for diagnostics/tests, while module-level constants
 preserve the existing import/monkeypatch pattern used throughout the package.
@@ -17,7 +17,11 @@ from pathlib import Path
 def cache_base_dir() -> Path:
     configured = os.environ.get("XDG_CACHE_HOME")
     if configured and configured.strip():
-        return Path(configured).expanduser()
+        candidate = Path(configured).expanduser()
+        # XDG base-directory variables must be absolute. A relative value is
+        # invalid and should be ignored rather than changing meaning with cwd.
+        if candidate.is_absolute():
+            return candidate
     return Path.home() / ".cache"
 
 
