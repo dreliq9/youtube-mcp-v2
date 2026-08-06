@@ -7,19 +7,14 @@ mode='chunked' → token-budgeted chunks with overlap (for very long videos)
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from .. import cache, envelope, validate
+from .. import cache, envelope, transcript_acquisition, validate
 from ..adapters import transcript_api
 from ..adapters.url import parse_video_id
-from ..adapters.transcript_api import (
-    NoTranscriptFound,
-    TranscriptsDisabled,
-    VideoUnavailable,
-)
 
 
-# Approx token estimate: ~4 chars/token for English. Good enough for budgeting.
 _CHARS_PER_TOKEN = 4
 _VALID_MODES = {"text", "timed", "chunked"}
 
@@ -103,7 +98,7 @@ def _build_chunked_payload(
         chunk_text = " ".join(s["text"] for s in buf).strip()
         chunks.append({
             "i": len(chunks),
-            "n": -1,  # filled in below
+            "n": -1,
             "start_s": buf[0]["start_s"],
             "end_s": buf[-1]["start_s"] + buf[-1].get("duration_s", 0),
             "text": chunk_text,
@@ -118,23 +113,17 @@ def _build_chunked_payload(
         while rewind > i and overlap_tokens < chunk_overlap:
             rewind -= 1
             overlap_tokens += _estimate_tokens(segments[rewind]["text"])
-        i = max(rewind, i + 1)  # ensure forward progress
+        i = max(rewind, i + 1)
 
     n = len(chunks)
-    for c in chunks:
-        c["n"] = n
+    for chunk in chunks:
+        chunk["n"] = n
 
     return {"id": video_id, "lang": lang, "chunks": chunks}
 
 
 def _resolve_duration(video_id: str) -> int | float | None:
-    """Resolve duration for the word-rate validation gate.
-
-    Prefer any cached metadata. If transcript.get was called directly without an
-    earlier inspect.video, run the same cheap pre-flight once so the transcript
-    does not receive a misleading `validated=True` merely because duration was
-    absent from cache.
-    """
+    """Resolve duration so the word-rate integrity check can actually run."""
     meta = cache.get_video_meta(video_id, fresh_only=False)
     if meta:
         duration = meta[0].get("duration_s")
@@ -148,10 +137,63 @@ def _resolve_duration(video_id: str) -> int | float | None:
         if inspected.get("error") is None and inspected.get("data"):
             return inspected["data"].get("duration_s")
     except Exception:
-        # Validation handles an unresolved duration explicitly. Transcript
-        # acquisition itself should still succeed when pre-flight metadata fails.
         pass
     return None
+
+
+def _cache_provenance(row: dict[str, Any]) -> dict[str, Any] | None:
+    provider = row.get("provider")
+    method = row.get("method")
+    attempts_raw = row.get("attempts_json")
+    if provider is None and method is None and not attempts_raw:
+        # Historical v0.2 row: do not fabricate provenance that was never stored.
+        return None
+    try:
+        attempts = json.loads(attempts_raw) if attempts_raw else []
+    except json.JSONDecodeError:
+        attempts = []
+    return {
+        "acquisition": {
+            "provider": provider,
+            "method": method,
+            "attempts": attempts,
+        }
+    }
+
+
+def _failure_envelope(
+    video_id: str,
+    lang: str,
+    exc: transcript_acquisition.TranscriptAcquisitionFailed,
+) -> dict[str, Any]:
+    primary = exc.primary_error
+    if isinstance(primary, transcript_api.TranscriptsDisabled):
+        return envelope.fail(
+            "transcripts_disabled",
+            f"transcripts are disabled for {video_id}",
+            recoverable=False,
+            provenance=exc.provenance,
+        )
+    if isinstance(primary, transcript_api.VideoUnavailable):
+        return envelope.fail(
+            "video_unavailable",
+            f"video {video_id} is unavailable to configured providers",
+            recoverable=False,
+            provenance=exc.provenance,
+        )
+    if isinstance(primary, transcript_api.NoTranscriptFound):
+        return envelope.fail(
+            "no_transcript",
+            f"no transcript for {video_id} in {lang} or any configured fallback",
+            recoverable=False,
+            provenance=exc.provenance,
+        )
+    return envelope.fail(
+        "transcript_fetch_failed",
+        "all configured transcript acquisition providers failed; see provenance attempts",
+        recoverable=True,
+        provenance=exc.provenance,
+    )
 
 
 def transcript_get(
@@ -162,11 +204,15 @@ def transcript_get(
     chunk_tokens: int = 500,
     chunk_overlap: int = 50,
 ) -> dict[str, Any]:
-    """Fetch a YouTube transcript in one of three shapes."""
+    """Fetch a YouTube transcript in one of three shapes.
+
+    Live acquisition is provider-independent: the primary caption client is tried
+    first and yt-dlp captions are tried second. Provenance records every attempt.
+    """
     try:
         video_id = parse_video_id(url_or_id)
-    except ValueError as e:
-        return envelope.fail("bad_url", str(e), recoverable=False)
+    except ValueError as exc:
+        return envelope.fail("bad_url", str(exc), recoverable=False)
 
     if mode not in _VALID_MODES:
         return envelope.fail(
@@ -186,14 +232,11 @@ def transcript_get(
                 recoverable=False,
             )
 
-    # Cache hit path: reshape the preserved transcript revision on the fly.
     cache_hit = cache.get_transcript(video_id, lang)
     if cache_hit is not None:
         row, age = cache_hit
-        import json as _json
-
-        segs = _json.loads(row["segments_json"]) if row.get("segments_json") else []
-        warnings = _json.loads(row["warnings_json"]) if row.get("warnings_json") else []
+        segs = json.loads(row["segments_json"]) if row.get("segments_json") else []
+        warnings = json.loads(row["warnings_json"]) if row.get("warnings_json") else []
         validated = bool(row["validated"])
         actual_lang = row.get("actual_lang") or lang
         raw_generated = row.get("is_generated")
@@ -215,40 +258,23 @@ def transcript_get(
             cache_age_s=age,
             validated=validated,
             warnings=warnings,
+            provenance=_cache_provenance(row),
         )
 
-    # Live fetch.
     try:
-        fetch = transcript_api.fetch_transcript(video_id, lang=lang)
-    except TranscriptsDisabled:
-        return envelope.fail(
-            "transcripts_disabled",
-            f"transcripts are disabled for {video_id}",
-            recoverable=False,
-        )
-    except VideoUnavailable:
-        return envelope.fail(
-            "video_unavailable",
-            f"video {video_id} is unavailable (private, deleted, age-gated)",
-            recoverable=False,
-        )
-    except NoTranscriptFound:
-        return envelope.fail(
-            "no_transcript",
-            f"no transcript for {video_id} in {lang} or any fallback",
-            recoverable=False,
-        )
-    except Exception as e:
-        return envelope.fail("transcript_fetch_failed", str(e))
+        acquired = transcript_acquisition.acquire_transcript(video_id, lang=lang)
+    except transcript_acquisition.TranscriptAcquisitionFailed as exc:
+        return _failure_envelope(video_id, lang, exc)
 
+    fetch = acquired.fetch
     segments = [
         {
-            "start_s": s.start_s,
-            "duration_s": s.duration_s,
-            "end_s": s.end_s,
-            "text": s.text,
+            "start_s": segment.start_s,
+            "duration_s": segment.duration_s,
+            "end_s": segment.end_s,
+            "text": segment.text,
         }
-        for s in fetch.segments
+        for segment in fetch.segments
     ]
 
     duration_s = _resolve_duration(video_id)
@@ -260,12 +286,21 @@ def transcript_get(
         requested_lang=lang,
         actual_lang=fetch.lang,
     )
+    if acquired.provider != "youtube-transcript-api":
+        warnings = [
+            *warnings,
+            f"transcript fallback used: {acquired.provider}",
+        ]
 
+    attempts = [attempt.as_dict() for attempt in acquired.attempts]
     cache.put_transcript(
         video_id=video_id,
         lang=lang,
         actual_lang=fetch.lang,
         is_generated=fetch.is_generated,
+        provider=acquired.provider,
+        method=acquired.method,
+        attempts=attempts,
         text=text,
         segments=segments,
         word_count=len(text.split()),
@@ -289,6 +324,7 @@ def transcript_get(
         source="scrape",
         validated=validated,
         warnings=warnings,
+        provenance=acquired.provenance,
     )
 
 
