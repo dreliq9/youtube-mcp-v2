@@ -1,52 +1,68 @@
 # youtube-mcp-v2
 
-A YouTube MCP server with 14 tools across two tiers. Designed around a few opinions: every tool returns the same envelope, scrapes and external binaries run in subprocesses with hard timeouts, and the SQLite cache is INSERT-only so historical fetches stay queryable.
+A disciplined YouTube MCP for evidence-grade video research. It exposes 14 tools across two tiers and is built around frozen research sets, validated transcripts, recoverable upstream failures, media extraction, and append-only local history.
+
+The long-term target is not "the most YouTube API wrappers." It is a reproducible multimodal research instrument: acquire video evidence reliably, preserve provenance, freeze corpora, and let an AI retrieve the exact spoken or visual moment that supports a claim.
+
+## Design principles
+
+- **Evidence before convenience** — tools report provenance and validation state rather than silently hiding fallbacks.
+- **Frozen research sets** — skeleton handles make multi-step research reproducible and diffable.
+- **Failure containment** — fragile scrapes and external binaries run behind hard timeouts and tool-boundary error envelopes.
+- **Never overwrite history** — transcript and metadata cache writes append new revisions.
+- **Small public tool surface** — compound research capabilities should not require the calling model to orchestrate dozens of low-level wrappers.
 
 ## Tiers
 
 | Tier | Prefix | Auth | Cost |
 |---|---|---|---|
-| 1 | `inspect.*`, `transcript.*`, `frame.*`, `scrape.*`, `skeleton.*` | none | free |
+| 1 | `inspect.*`, `transcript.*`, `frame.*`, `audio.*`, `scrape.*`, `skeleton.*` | none | free/local compute |
 | 2 | `api.*` | `YOUTUBE_API_KEY` env (Data API v3) | YouTube quota |
 
-The calling LLM picks tier explicitly. One documented exception: `skeleton.build(target='channel')` upgrades from tier-1 page-scrape (~50 recent uploads) to tier-2 enumeration when an API key is present. The envelope's `source` field reports which tier ran.
+The calling LLM picks tier explicitly. One documented exception: `skeleton.build(target='channel')` upgrades from tier-1 page scraping to tier-2 enumeration when an API key is present. The response envelope reports which source ran.
 
 ## Tools (14)
 
 **Pre-flight**
-- `inspect.video(url_or_id)` — id, title, duration, channel, default language, available caption langs, age-gate flag, embed-allowed flag, livestream flag
+- `inspect.video(url_or_id)` — id, title, duration, channel, caption languages, age-gate flag, embed flag, livestream flag
 
-**Skeleton — frozen reference for multi-step research**
-- `skeleton.build(target='channel'|'topic', value, limit=50)` — returns a new handle each call
-- `skeleton.list(handle)` — videos in the skeleton
-- `skeleton.get(handle)` — full skeleton record
-- `skeleton.index(target=None)` — list all skeletons on disk
-- `skeleton.expire(handle)` — mark stale (file is preserved; only an `expired_at` field is set)
+**Skeletons — frozen reference objects for multi-step research**
+- `skeleton.build(target='channel'|'topic', value, limit=50)` — creates a new immutable research snapshot
+- `skeleton.list(handle)` — videos in the snapshot
+- `skeleton.get(handle)` — full snapshot + provenance
+- `skeleton.index(target=None)` — discover snapshots on disk
+- `skeleton.expire(handle)` — mark stale without deleting history
 
 **Transcripts**
-- `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)` — runs a word-rate plausibility check (0.3–6.0 wps over the video duration); failures appear in `warnings` with `validated: false`, but the data still returns
+- `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)`
+- Runs timestamp, language, truncation, and word-rate checks.
+- v0.2.1 preserves both requested and actual caption language plus generated-caption status when known.
+- If the word-rate gate cannot run because duration cannot be resolved, the transcript is returned but is **not** reported as fully validated.
 
 **Frames**
-- `frame.get(url_or_id, mode='single'|'sheet', ...)` — yt-dlp downloads the video to a temp dir, ffmpeg extracts, temp file is deleted on success
+- `frame.get(url_or_id, mode='single'|'sheet', ...)` — yt-dlp + ffmpeg frame or contact-sheet extraction with caching
 
 **Audio**
-- `audio.get(url_or_id, fmt='wav', sample_rate=22050, start_s=None, end_s=None)` — yt-dlp downloads best audio to a temp dir, ffmpeg converts it to cached mono audio for transcription tools such as Basic Pitch and Song Maker audio-to-tab
+- `audio.get(url_or_id, fmt='wav', sample_rate=22050, start_s=None, end_s=None)` — cached mono audio extraction for downstream local transcription or audio analysis
 
 **Search**
-- `scrape.search(query, n=10)` — HTML scrape of YouTube's search results page; runs in a subprocess with a 20s timeout
+- `scrape.search(query, n=10)` — no-key YouTube search behind subprocess isolation
 
-**Tier-2 (Data API v3)**
-- `api.search`, `api.channel_stats`, `api.trending`, `api.video_categories`
+**Tier-2 — Data API v3**
+- `api.search` — 1 unit in YouTube's Search Queries bucket; default allocation is currently 100 calls/day
+- `api.channel_stats`
+- `api.trending`
+- `api.video_categories`
 
 ## Response envelope
 
-Every tool returns this shape, on success and on failure:
+Every tool returns the same top-level contract on success and failure:
 
 ```json
 {
-  "data": <payload or null>,
-  "fetched_at": "2026-04-30T14:22:01Z",
-  "source": "scrape" | "api" | "cache",
+  "data": "<tool-specific payload or null>",
+  "fetched_at": "2026-08-06T12:00:00Z",
+  "source": "scrape | api | cache",
   "cache_age_s": 0,
   "validated": true,
   "warnings": [],
@@ -54,42 +70,49 @@ Every tool returns this shape, on success and on failure:
 }
 ```
 
-On error, `data` is `null` and `error` is `{code, message, recoverable}`. Examples: `bad_url`, `auth_required`, `quota_exceeded`, `subprocess_failure`, `watch_page_fetch_failed`. Subprocess timeouts and adapter exceptions are caught at the tool boundary and translated to envelope errors.
+On error, `data` is `null` and `error` is `{code, message, recoverable}`. Upstream failures are translated at the tool boundary rather than crashing the MCP process.
 
-## Subprocess isolation — what's isolated, what isn't
+The next major schema evolution is an **Evidence Envelope** that makes acquisition method, source revision, content hashes, transcript type, and timestamped evidence first-class. See `EVIDENCE_MODEL.md`.
 
-`isolation.py` runs callables in a `ProcessPoolExecutor` with a hard timeout. It's used for paths that could segfault, hang, or stall on layout changes:
-- `scrape.search` (HTML parse)
-- `skeleton.build(target='channel')` page scrape
-- `skeleton.build(target='topic')` page scrape
+## Isolation
 
-Pure-Python paths (httpx requests, `youtube-transcript-api`, the Data API client) run in-process and rely on each library's own timeouts. Frame extraction shells out to yt-dlp + ffmpeg via `subprocess`, with timeouts on each call.
+`isolation.py` runs fragile Python scrape paths in a `ProcessPoolExecutor` with hard timeouts. yt-dlp and ffmpeg use bounded subprocess calls. Pure-Python HTTP/API paths rely on explicit library timeouts and tool-boundary exception handling.
 
-## Cache
+Current isolated paths include:
+- `scrape.search`
+- `skeleton.build(target='channel')` scrape path
+- `skeleton.build(target='topic')`
+- yt-dlp / ffmpeg media operations
 
-SQLite at `~/.cache/youtube-mcp/v2.sqlite` (override with `XDG_CACHE_HOME`). Stores transcripts, video metadata, and search results. Schema is INSERT-only with `AUTOINCREMENT` primary keys plus `(target, fetched_at DESC)` indexes — re-fetching adds a new row, lookup hits the most recent. No `UPDATE` or `REPLACE` paths exist.
+## Cache and reproducibility
 
-Skeletons live as JSON files under `~/.cache/youtube-mcp/skeletons/`. Each `skeleton.build` produces a new timestamped handle; old handles stay on disk. `skeleton.expire` mutates the file to add an `expired_at` field but does not delete it.
+SQLite lives at `~/.cache/youtube-mcp/v2.sqlite`. Transcript and video metadata writes are append-only; lookups select the newest matching revision. v0.2.1 performs additive schema migration for transcript provenance and does not rewrite historical rows.
+
+Skeletons live under `~/.cache/youtube-mcp/skeletons/`. Every build gets a timestamped handle. Old handles remain queryable so later corpus-diff and benchmark workflows can reproduce what the agent actually saw.
 
 ## Install
 
-Requires Python 3.10+ and `ffmpeg` in `PATH` (only needed for `frame.get` and `audio.get`).
+Requires Python 3.10+. `ffmpeg` must be available in `PATH` for `frame.get` and `audio.get`.
 
 ```bash
 pip install git+https://github.com/dreliq9/youtube-mcp-v2.git
 ```
 
 Optional extras:
+
 ```bash
-pip install "youtube-mcp-v2[api,frame] @ git+https://github.com/dreliq9/youtube-mcp-v2.git"
+pip install "youtube-mcp-v2[api,media] @ git+https://github.com/dreliq9/youtube-mcp-v2.git"
 ```
 
-- `api` — pulls in `google-api-python-client` for the four `api.*` tools
-- `frame` — pulls in `yt-dlp` for `frame.get`
+- `api` — `google-api-python-client` for `api.*`
+- `media` — `yt-dlp` for both `frame.get` and `audio.get`
+- `frame` and `audio` remain compatibility aliases for the same yt-dlp dependency
 
-## Configure your MCP client
+## MCP compatibility
 
-For Claude Code or any stdio-MCP client:
+v0.2.1 targets the stable **MCP Python SDK v2** line and the 2026-07-28 protocol generation while retaining compatibility with older clients through the SDK's protocol negotiation.
+
+For a stdio MCP client:
 
 ```json
 {
@@ -104,15 +127,38 @@ For Claude Code or any stdio-MCP client:
 }
 ```
 
-Without `YOUTUBE_API_KEY`, the four `api.*` tools still register but return `error.code = "auth_required"` when called.
+Without `YOUTUBE_API_KEY`, `api.*` tools still register and return `error.code = "auth_required"` if invoked.
 
-## Design
+## Quality gates
 
-`SPEC_r3.md` is the canonical spec (rationale, tier model, envelope schema, discipline notes, future direction). `SPEC.md` and `SPEC_r2.md` are kept as design history.
+GitHub Actions runs:
+- non-network unit tests on Python 3.10, 3.11, 3.12, and 3.13
+- import/package smoke tests on Linux, macOS, and Windows
+- bytecode compilation before the unit suite
+
+Live YouTube tests remain explicitly marked `network`/`slow` so CI does not confuse upstream throttling with a deterministic code regression.
+
+## Product roadmap
+
+The next sequence is intentionally acquisition-first:
+
+1. **v0.3 — Reliable acquisition:** provider abstraction, transcript fallback waterfall, proxy/cookie support, acquisition provenance, playlist/corpus ingestion.
+2. **v0.4 — Evidence search:** local transcription fallback, embeddings, semantic search over frozen corpora, timestamped supporting excerpts.
+3. **v0.5 — Multimodal temporal search:** scene detection, OCR, visual embeddings, and cross-modal spoken + on-screen evidence retrieval.
+4. **v0.6 — Distribution:** PyPI/uvx, Docker, official MCP Registry, and Streamable HTTP/remote-safe artifact delivery.
+5. **v0.7 — Research workflows:** a small number of strong compound retrieval tools rather than a 50-tool orchestration burden.
+
+See `ROADMAP.md` for acceptance criteria and `BENCHMARK.md` for the proposed public YouTube-MCP benchmark.
+
+## Design history
+
+`SPEC_r3.md` remains the canonical v0.2 design rationale. `SPEC.md` and `SPEC_r2.md` are preserved as design history rather than overwritten.
 
 ## Status
 
-v0.2. Tier 3 (`oauth.*`, own-channel automation) is a reserved namespace — not implemented. v0.3+ is sketched in `SPEC_r3.md` §12.
+**v0.2.1 stabilization:** MCP SDK v2 migration, packaging/CI hardening, transcript provenance, and stricter validation semantics.
+
+Tier 3 (`oauth.*`, own-channel automation) remains reserved and is not a near-term product priority; creator automation is a different product axis from evidence-grade research.
 
 ## License
 
