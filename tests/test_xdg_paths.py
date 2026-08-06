@@ -30,7 +30,6 @@ def test_xdg_cache_home_moves_every_persisted_artifact_root(tmp_path, monkeypatc
         assert audio_extract.AUDIO_DIR == expected / "audio"
         assert frame_extract.FRAMES_DIR == expected / "frames"
 
-    # Restore module-level constants for tests that run after this one.
     _reload_storage_modules()
 
 
@@ -42,11 +41,10 @@ def test_blank_xdg_cache_home_uses_home_cache(monkeypatch) -> None:
     importlib.reload(paths)
 
 
-def test_relative_xdg_cache_home_is_preserved(monkeypatch) -> None:
-    # XDG permits implementation-specific handling here; preserving the caller's
-    # configured Path is preferable to silently redirecting elsewhere.
+def test_relative_xdg_cache_home_is_invalid_and_ignored(monkeypatch) -> None:
     with monkeypatch.context() as scoped:
         scoped.setenv("XDG_CACHE_HOME", "relative-cache")
         importlib.reload(paths)
-        assert paths.CACHE_DIR == Path("relative-cache") / "youtube-mcp"
+        assert paths.cache_base_dir() == Path.home() / ".cache"
+        assert paths.CACHE_DIR == Path.home() / ".cache" / "youtube-mcp"
     importlib.reload(paths)
