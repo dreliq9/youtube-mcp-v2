@@ -93,6 +93,23 @@ def _root(kind: str) -> Path:
     raise ArtifactError(f"unsupported artifact kind: {kind!r}")
 
 
+def _managed_path(
+    *,
+    kind: Literal["frame", "audio"],
+    ext: str,
+    video_id: str,
+    name: str,
+) -> Path:
+    """Resolve an artifact strictly inside its managed per-video cache directory."""
+    _validate_identity(video_id, name)
+    _mime(kind, ext)
+    expected_dir = (_root(kind) / video_id).resolve()
+    candidate = (expected_dir / f"{name}.{ext}").resolve()
+    if candidate.parent != expected_dir:
+        raise ArtifactError("artifact path escaped its video cache directory")
+    return candidate
+
+
 def _resource_uri(kind: str, ext: str, video_id: str, name: str) -> str:
     _validate_identity(video_id, name)
     _mime(kind, ext)
@@ -105,13 +122,15 @@ def reference_for_path(
     kind: Literal["frame", "audio"],
     video_id: str,
 ) -> ArtifactReference:
-    """Create a portable reference for an artifact path returned by our adapters."""
-    artifact_path = Path(path)
+    """Create a portable reference only for a file managed by our media cache."""
+    artifact_path = Path(path).resolve()
     ext = artifact_path.suffix.lower().lstrip(".")
     name = artifact_path.stem
-    _validate_identity(video_id, name)
-    mime_type = _mime(kind, ext)
+    expected = _managed_path(kind=kind, ext=ext, video_id=video_id, name=name)
+    if artifact_path != expected:
+        raise ArtifactError("artifact path is outside the managed media cache")
 
+    mime_type = _mime(kind, ext)
     try:
         size = artifact_path.stat().st_size
     except OSError as exc:
@@ -135,13 +154,7 @@ def _safe_path(
     video_id: str,
     name: str,
 ) -> Path:
-    _validate_identity(video_id, name)
-    _mime(kind, ext)
-
-    expected_dir = (_root(kind) / video_id).resolve()
-    candidate = (expected_dir / f"{name}.{ext}").resolve()
-    if candidate.parent != expected_dir:
-        raise ArtifactError("artifact path escaped its video cache directory")
+    candidate = _managed_path(kind=kind, ext=ext, video_id=video_id, name=name)
     if not candidate.is_file():
         raise ArtifactNotFound(f"artifact does not exist: {kind}/{video_id}/{name}.{ext}")
     return candidate
