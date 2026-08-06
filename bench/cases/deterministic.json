@@ -1,0 +1,40 @@
+{
+  "benchmark_version": "0.1",
+  "adapter": "youtube_mcp_v2",
+  "description": "Thirty no-network contract cases for parsing, transcript validation, caller guards, and frozen-handle compatibility.",
+  "cases": [
+    {"id":"url-bare","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-watch-www","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/watch?v=jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-watch-mobile","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://m.youtube.com/watch?v=jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-short","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://youtu.be/jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-shorts","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/shorts/jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-embed","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/embed/jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-live","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/live/jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-v-path","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/v/jNQXAC9IVRw"},"expected":{"ok":true,"video_id":"jNQXAC9IVRw"}},
+    {"id":"url-bad-domain","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://example.com/not-youtube"},"expected":{"ok":false,"error_type":"ValueError"}},
+    {"id":"url-empty","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":""},"expected":{"ok":false,"error_type":"ValueError"}},
+    {"id":"url-too-short","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"abc"},"expected":{"ok":false,"error_type":"ValueError"}},
+    {"id":"url-playlist-only","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/playlist?list=PL123"},"expected":{"ok":false,"error_type":"ValueError"}},
+    {"id":"url-channel-only","suite":"url","task":"parse_video_id","mode":"deterministic","input":{"value":"https://www.youtube.com/@youtube"},"expected":{"ok":false,"error_type":"ValueError"}},
+
+    {"id":"validation-empty","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"text":"","segments":[],"duration_s":60,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":false,"warning_kinds":["empty"]}},
+    {"id":"validation-duration-missing","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"text":"ordinary transcript words","segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":null,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":false,"warning_kinds":["duration_unavailable"]}},
+    {"id":"validation-low-rate","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":1,"segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":100,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":false,"warning_kinds":["low_word_rate"]}},
+    {"id":"validation-high-rate","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":70,"segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":10,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":false,"warning_kinds":["high_word_rate"]}},
+    {"id":"validation-language-fallback","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":20,"segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":10,"requested_lang":"fr","actual_lang":"en"},"expected":{"validated":true,"warning_kinds":["lang_fallback"]}},
+    {"id":"validation-truncation","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"text":"normal words before [...] after","segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":5,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":false,"warning_kinds":["truncation_marker"]}},
+    {"id":"validation-nonmonotonic","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":20,"segments":[{"start_s":5.0,"duration_s":1.0},{"start_s":4.0,"duration_s":1.0}],"duration_s":10,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":false,"warning_kinds":["non_monotonic_timestamp"]}},
+    {"id":"validation-ordinary-pass","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":20,"segments":[{"start_s":0.0,"duration_s":1.0},{"start_s":5.0,"duration_s":1.0}],"duration_s":10,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":true,"warning_kinds":[]}},
+    {"id":"validation-min-boundary","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":3,"segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":10,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":true,"warning_kinds":[]}},
+    {"id":"validation-max-boundary","suite":"validation","task":"validate_transcript","mode":"deterministic","input":{"word_count":60,"segments":[{"start_s":0.0,"duration_s":1.0}],"duration_s":10,"requested_lang":"en","actual_lang":"en"},"expected":{"validated":true,"warning_kinds":[]}},
+
+    {"id":"transcript-bad-url","suite":"transcript","task":"transcript_guard","mode":"deterministic","input":{"url_or_id":"https://example.com/nope","mode":"text"},"expected":{"error_code":"bad_url","recoverable":false}},
+    {"id":"transcript-bad-mode","suite":"transcript","task":"transcript_guard","mode":"deterministic","input":{"url_or_id":"jNQXAC9IVRw","mode":"mystery"},"expected":{"error_code":"bad_mode","recoverable":false}},
+    {"id":"transcript-zero-chunk","suite":"transcript","task":"transcript_guard","mode":"deterministic","input":{"url_or_id":"jNQXAC9IVRw","mode":"chunked","chunk_tokens":0},"expected":{"error_code":"bad_chunk_tokens","recoverable":false}},
+    {"id":"transcript-equal-overlap","suite":"transcript","task":"transcript_guard","mode":"deterministic","input":{"url_or_id":"jNQXAC9IVRw","mode":"chunked","chunk_tokens":100,"chunk_overlap":100},"expected":{"error_code":"bad_chunk_overlap","recoverable":false}},
+    {"id":"transcript-negative-overlap","suite":"transcript","task":"transcript_guard","mode":"deterministic","input":{"url_or_id":"jNQXAC9IVRw","mode":"chunked","chunk_tokens":100,"chunk_overlap":-1},"expected":{"error_code":"bad_chunk_overlap","recoverable":false}},
+
+    {"id":"handle-legacy","suite":"corpus","task":"skeleton_handle","mode":"deterministic","input":{"handle":"topic-battery-research-20260806-120000"},"expected":{"valid":true}},
+    {"id":"handle-microseconds","suite":"corpus","task":"skeleton_handle","mode":"deterministic","input":{"handle":"topic-battery-research-20260806-120000-123456"},"expected":{"valid":true}}
+  ]
+}
