@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from mcp.server import MCPServer
 
-from youtube_mcp_v2 import cache, validate
+from youtube_mcp_v2 import cache, skeleton, validate
 from youtube_mcp_v2.server import mcp
 from youtube_mcp_v2.tools.transcript import transcript_get
 
@@ -111,3 +112,35 @@ def test_cache_migrates_legacy_transcript_table(tmp_path, monkeypatch) -> None:
     assert "actual_lang" in columns
     assert "is_generated" in columns
     assert Path(cache.CACHE_PATH).exists()
+
+
+def _redirect_skeleton_dirs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(skeleton, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(skeleton, "SKELETON_DIR", tmp_path / "skeletons")
+    monkeypatch.setattr(skeleton, "VECTOR_DIR", tmp_path / "vectors")
+    monkeypatch.setattr(skeleton, "MODEL_DIR", tmp_path / "models")
+
+
+def test_new_and_legacy_skeleton_handles_are_valid() -> None:
+    new_handle = skeleton.make_handle("topic", "battery research")
+    assert skeleton.is_valid_handle(new_handle)
+    assert skeleton.is_valid_handle("topic-battery-research-20260430-120000")
+
+
+def test_skeleton_creation_refuses_to_overwrite(tmp_path, monkeypatch) -> None:
+    _redirect_skeleton_dirs(tmp_path, monkeypatch)
+    handle = skeleton.make_handle("topic", "collision test")
+    payload = {
+        "handle": handle,
+        "target": "topic",
+        "value": "collision test",
+        "built_at": skeleton._now_iso(),
+        "source": "scrape",
+        "expired_at": None,
+        "channel": None,
+        "videos": [],
+    }
+
+    skeleton.save_skeleton(payload)
+    with pytest.raises(FileExistsError):
+        skeleton.save_skeleton(payload)
