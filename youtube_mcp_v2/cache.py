@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     video_id TEXT NOT NULL,
     lang TEXT NOT NULL,
+    actual_lang TEXT,
+    is_generated INTEGER,
     text TEXT NOT NULL,
     segments_json TEXT,
     word_count INTEGER,
@@ -59,6 +61,23 @@ def _ensure_cache_dir() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Apply additive migrations without rewriting historical rows.
+
+    v0.2.1 adds transcript provenance fields. Existing cache files are upgraded in
+    place; old rows remain valid and simply have NULL provenance for fields that
+    were not recorded when they were fetched.
+    """
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(transcripts)").fetchall()
+    }
+    if "actual_lang" not in columns:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN actual_lang TEXT")
+    if "is_generated" not in columns:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN is_generated INTEGER")
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     _ensure_cache_dir()
@@ -66,6 +85,7 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        _ensure_schema_migrations(conn)
         yield conn
         conn.commit()
     finally:
@@ -99,15 +119,28 @@ def put_transcript(
     word_count: int,
     validated: bool,
     warnings: list[str],
+    *,
+    actual_lang: str | None = None,
+    is_generated: bool | None = None,
 ) -> None:
+    """Append one transcript revision.
+
+    `lang` is the language the caller requested and remains the lookup key for
+    backward compatibility. `actual_lang` records the caption track that was
+    actually returned after fallback. `is_generated` preserves whether the
+    upstream caption track was auto-generated when that information is known.
+    """
     with connect() as conn:
         conn.execute(
             "INSERT INTO transcripts "
-            "(video_id, lang, text, segments_json, word_count, fetched_at, validated, warnings_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(video_id, lang, actual_lang, is_generated, text, segments_json, "
+            " word_count, fetched_at, validated, warnings_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 video_id,
                 lang,
+                actual_lang,
+                None if is_generated is None else (1 if is_generated else 0),
                 text,
                 json.dumps(segments) if segments is not None else None,
                 word_count,
@@ -124,7 +157,7 @@ def get_transcript(
     *,
     fresh_only: bool = True,
 ) -> tuple[dict[str, Any], int] | None:
-    """Return (row_dict, age_seconds) for the most recent cached transcript, or None."""
+    """Return (row_dict, age_seconds) for the newest requested-language row."""
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM transcripts WHERE video_id = ? AND lang = ? "
