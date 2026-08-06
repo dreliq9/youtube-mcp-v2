@@ -1,7 +1,7 @@
 """Audio extraction via yt-dlp + ffmpeg.
 
-Outputs are cached at ~/.cache/youtube-mcp/audio/<videoId>/ and are intended
-for downstream transcription tools such as Basic Pitch.
+Outputs are cached under the shared XDG-aware youtube-mcp cache root and are
+intended for downstream transcription or audio-analysis tools.
 """
 
 from __future__ import annotations
@@ -12,8 +12,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-CACHE_DIR = Path.home() / ".cache" / "youtube-mcp"
-AUDIO_DIR = CACHE_DIR / "audio"
+from ..paths import AUDIO_DIR as _DEFAULT_AUDIO_DIR
+from ..paths import CACHE_DIR as _DEFAULT_CACHE_DIR
+
+CACHE_DIR = _DEFAULT_CACHE_DIR
+AUDIO_DIR = _DEFAULT_AUDIO_DIR
 
 YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -38,9 +41,9 @@ class AudioResult:
 
 
 def _audio_cache_dir(video_id: str) -> Path:
-    d = AUDIO_DIR / video_id
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    directory = AUDIO_DIR / video_id
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
 def _run(cmd: list[str], timeout_s: int) -> subprocess.CompletedProcess:
@@ -52,12 +55,12 @@ def _run(cmd: list[str], timeout_s: int) -> subprocess.CompletedProcess:
             timeout=timeout_s,
             check=False,
         )
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired as exc:
         raise AudioExtractError(
             f"timeout after {timeout_s}s: {' '.join(cmd[:3])}..."
-        ) from e
-    except FileNotFoundError as e:
-        raise AudioExtractError(f"binary not found: {cmd[0]}") from e
+        ) from exc
+    except FileNotFoundError as exc:
+        raise AudioExtractError(f"binary not found: {cmd[0]}") from exc
 
 
 def _download_audio(video_id: str, dest_dir: Path) -> Path:
@@ -67,8 +70,10 @@ def _download_audio(video_id: str, dest_dir: Path) -> Path:
         "--no-playlist",
         "--quiet",
         "--no-warnings",
-        "-f", "ba/bestaudio/best",
-        "-o", out_template,
+        "-f",
+        "ba/bestaudio/best",
+        "-o",
+        out_template,
         f"https://www.youtube.com/watch?v={video_id}",
     ]
     cp = _run(cmd, DOWNLOAD_TIMEOUT_S)

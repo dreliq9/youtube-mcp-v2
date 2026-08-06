@@ -1,7 +1,4 @@
-"""Versioned SQLite cache. Append-only — new fetches insert new rows, never overwrite.
-
-Cache lives at ~/.cache/youtube-mcp/v2.sqlite (XDG-canonical).
-"""
+"""Versioned SQLite cache. Append-only — new fetches insert new rows, never overwrite."""
 
 from __future__ import annotations
 
@@ -12,8 +9,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-CACHE_DIR = Path.home() / ".cache" / "youtube-mcp"
-CACHE_PATH = CACHE_DIR / "v2.sqlite"
+from .paths import CACHE_DIR as _DEFAULT_CACHE_DIR
+from .paths import SQLITE_PATH as _DEFAULT_CACHE_PATH
+
+# Module aliases are intentionally retained because tests/downstream callers have
+# historically monkeypatched these names directly.
+CACHE_DIR = _DEFAULT_CACHE_DIR
+CACHE_PATH = _DEFAULT_CACHE_PATH
 
 TTL_TRANSCRIPTS = timedelta(days=30)
 TTL_VIDEO_META = timedelta(days=7)
@@ -62,12 +64,7 @@ def _ensure_cache_dir() -> None:
 
 
 def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
-    """Apply additive migrations without rewriting historical rows.
-
-    v0.2.1 adds transcript provenance fields. Existing cache files are upgraded in
-    place; old rows remain valid and simply have NULL provenance for fields that
-    were not recorded when they were fetched.
-    """
+    """Apply additive migrations without rewriting historical rows."""
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(transcripts)").fetchall()
@@ -123,13 +120,6 @@ def put_transcript(
     actual_lang: str | None = None,
     is_generated: bool | None = None,
 ) -> None:
-    """Append one transcript revision.
-
-    `lang` is the language the caller requested and remains the lookup key for
-    backward compatibility. `actual_lang` records the caption track that was
-    actually returned after fallback. `is_generated` preserves whether the
-    upstream caption track was auto-generated when that information is known.
-    """
     with connect() as conn:
         conn.execute(
             "INSERT INTO transcripts "
@@ -157,7 +147,6 @@ def get_transcript(
     *,
     fresh_only: bool = True,
 ) -> tuple[dict[str, Any], int] | None:
-    """Return (row_dict, age_seconds) for the newest requested-language row."""
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM transcripts WHERE video_id = ? AND lang = ? "
