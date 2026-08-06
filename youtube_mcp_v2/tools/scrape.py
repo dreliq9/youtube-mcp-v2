@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import envelope, isolation
+from .. import cache, envelope, isolation
 
 
 def scrape_search(query: str, n: int = 10) -> dict[str, Any]:
@@ -18,12 +18,24 @@ def scrape_search(query: str, n: int = 10) -> dict[str, Any]:
     """
     if not query or not query.strip():
         return envelope.fail("bad_query", "query is empty", recoverable=False)
+
+    normalized = query.strip()
     n = max(1, min(int(n), 50))
+
+    cached = cache.get_search_results(normalized, min_results=n)
+    if cached is not None:
+        results, age = cached
+        return envelope.ok(
+            results[:n],
+            source="cache",
+            cache_age_s=age,
+        )
 
     try:
         results = isolation.run_isolated(
             "youtube_mcp_v2.adapters.search_scrape.search_videos",
-            query, n,
+            normalized,
+            n,
             timeout_s=20,
         )
     except TimeoutError as e:
@@ -31,4 +43,5 @@ def scrape_search(query: str, n: int = 10) -> dict[str, Any]:
     except RuntimeError as e:
         return envelope.fail("search_scrape_failed", str(e))
 
+    cache.put_search_results(normalized, results)
     return envelope.ok(results, source="scrape")
