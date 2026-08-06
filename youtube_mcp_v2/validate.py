@@ -13,7 +13,7 @@ def validate_transcript(
     *,
     text: str,
     segments: list[dict] | None,
-    duration_s: int | None,
+    duration_s: int | float | None,
     requested_lang: str,
     actual_lang: str | None,
 ) -> tuple[bool, list[str]]:
@@ -41,12 +41,18 @@ def validate_transcript(
                 f"({word_count} words / {duration_s}s) — possible duplication"
             )
             ok = False
+    else:
+        # The word-rate gate is one of the core transcript integrity checks. If
+        # duration could not be resolved, do not claim the transcript is fully
+        # validated merely because the checks we *could* run happened to pass.
+        warnings.append("duration unavailable — word-rate validation skipped")
+        ok = False
 
     if actual_lang and actual_lang != requested_lang:
         warnings.append(
             f"lang fallback: requested={requested_lang} got={actual_lang}"
         )
-        # Lang fallback is informational, not a hard fail.
+        # Lang fallback is informational, not a hard fail by itself.
 
     if "[...]" in text or "[…]" in text:
         warnings.append("truncation marker found in text")
