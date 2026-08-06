@@ -1,10 +1,10 @@
-"""FastMCP entrypoint. Registers v0.2 tools with namespaced names.
+"""MCPServer entrypoint. Registers v0.2.1 tools with namespaced names.
 
 Hard-cut migration: this server replaces the v0.1 `youtube` MCP entry. Tool names
 are intentionally NOT backwards-compatible — the LLM should learn the new namespace.
 
 Loads YOUTUBE_API_KEY from a project-local .env if present (BYO key — file is
-gitignored). The Claude config env block also works and takes precedence.
+gitignored). The client config env block also works and takes precedence.
 """
 
 from __future__ import annotations
@@ -14,13 +14,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
+from mcp.server import MCPServer
 
 # Load .env from the project root (the dir containing pyproject.toml).
-# override=False so an explicit env var from Claude config wins.
+# override=False so an explicit env var from the client config wins.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
-
-from mcp.server.fastmcp import FastMCP
 
 from .tools.inspect import inspect_video as _inspect_video
 from .tools.transcript import transcript_get as _transcript_get
@@ -44,7 +43,7 @@ from .tools.api import (
 log = logging.getLogger("youtube-mcp-v2")
 logging.basicConfig(level=logging.INFO)
 
-mcp = FastMCP("YouTube v0.2")
+mcp = MCPServer("YouTube v0.2.1")
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +87,8 @@ def tool_transcript_get(
     DO NOT USE: when you don't yet have a video id — call inspect.video first.
     OUTPUT SHAPE: depends on mode. text → {text, word_count}; timed → {segments,
                   next_cursor}; chunked → {chunks: [{i, n, start_s, end_s, text,
-                  token_estimate}]}.
+                  token_estimate}]}. All modes include requested_lang, actual lang,
+                  and whether the caption track was generated when known.
     """
     return _transcript_get(
         url_or_id,
@@ -134,7 +134,7 @@ def tool_skeleton_build(
     USE WHEN target='channel': stable list of a creator's recent uploads to fan
                                downstream calls (transcripts, frames) against.
     USE WHEN target='topic':   frozen snapshot of search results for later
-                               comparison or v0.3 ml.search_skeleton.
+                               comparison or semantic search.
     DO NOT USE WHEN: you only need a one-shot search — call scrape.search.
     OUTPUT SHAPE: envelope wrapping {handle, target, value, source, count}.
                   Use skeleton.get / skeleton.list to read the contents.
@@ -234,8 +234,8 @@ def tool_audio_get(
 ) -> dict[str, Any]:
     """Extract YouTube audio to a local file for downstream transcription.
 
-    USE WHEN: another tool needs a local audio path, especially Song Maker's
-              audio-to-tab path via Basic Pitch. Defaults to mono 22.05 kHz WAV.
+    USE WHEN: another tool needs a local audio path, especially local speech or
+              music-analysis tooling. Defaults to mono 22.05 kHz WAV.
     DO NOT USE WHEN: you only need words — call transcript.get instead.
     OUTPUT SHAPE: envelope wrapping {id, path, format, sample_rate, mono,
                   start_s, end_s, cached}.
@@ -268,7 +268,7 @@ def tool_api_search(
     DO NOT USE WHEN: no key — use scrape.search.
     OUTPUT SHAPE: envelope wrapping list of {id, title, channel, channel_id,
                   published_at, description_excerpt, url}.
-    QUOTA: 100 units per call (~100/day on free tier).
+    QUOTA: 1 unit in the Search Queries bucket; default allocation is 100 calls/day.
     """
     return _api_search(query, max_results, order, published_after, channel_id)
 
