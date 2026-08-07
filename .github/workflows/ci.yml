@@ -58,10 +58,14 @@ jobs:
           cache: pip
       - name: Install semantic extra
         run: python -m pip install -e ".[semantic]"
-      - name: Verify FastEmbed API without model download
+      - name: Verify FastEmbed text + visual APIs without model download
         run: >-
-          python -c "from fastembed import TextEmbedding;
+          python -c "from fastembed import ImageEmbedding, TextEmbedding;
           from youtube_mcp_v2.embeddings import DEFAULT_MODEL_ID;
-          models = TextEmbedding.list_supported_models();
-          assert any(m.get('model') == DEFAULT_MODEL_ID for m in models);
-          print(DEFAULT_MODEL_ID)"
+          from youtube_mcp_v2.visual_embeddings import DEFAULT_IMAGE_MODEL, DEFAULT_TEXT_MODEL;
+          text_models = TextEmbedding.list_supported_models();
+          image_models = ImageEmbedding.list_supported_models();
+          assert any(m.get('model') == DEFAULT_MODEL_ID for m in text_models);
+          assert any(m.get('model') == DEFAULT_TEXT_MODEL for m in text_models);
+          assert any(m.get('model') == DEFAULT_IMAGE_MODEL for m in image_models);
+          print(DEFAULT_MODEL_ID, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL)"
