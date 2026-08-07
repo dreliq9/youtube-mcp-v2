@@ -134,7 +134,7 @@ def test_derive_from_existing_collection_with_add_and_remove(tmp_path, monkeypat
 
 def test_compose_rejects_bad_video_reference_before_writing(tmp_path, monkeypatch) -> None:
     _configure(tmp_path, monkeypatch)
-    env = corpus_compose("bad input", videos=["not-a-video"])
+    env = corpus_compose("bad input", videos=["https://example.com/not-youtube"])
     assert env["error"]["code"] == "bad_video"
     assert not list(skeleton.SKELETON_DIR.glob("*.json")) if skeleton.SKELETON_DIR.exists() else True
 
