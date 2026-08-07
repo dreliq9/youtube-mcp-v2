@@ -154,13 +154,13 @@ def test_pinned_index_remains_reproducible_after_transcript_refresh(
     tmp_path, monkeypatch
 ) -> None:
     _fixture(tmp_path, monkeypatch)
-    old = corpus_index.prepare_index(HANDLE, chunk_tokens=30)
+    old = corpus_index.prepare_index(HANDLE, chunk_tokens=30, chunk_overlap=4)
 
     _put(
         VID_A,
         [(10.0, 5.0, "The replacement transcript discusses a gallium nitride stage only.")],
     )
-    new = corpus_index.prepare_index(HANDLE, chunk_tokens=30)
+    new = corpus_index.prepare_index(HANDLE, chunk_tokens=30, chunk_overlap=4)
 
     assert new.index_revision != old.index_revision
 
@@ -192,7 +192,7 @@ def test_validated_only_excludes_unvalidated_evidence(tmp_path, monkeypatch) -> 
     _save_corpus(include_c=False)
     _put(VID_A, [(1.0, 2.0, "shared phrase from validated evidence")], validated=True)
     _put(VID_B, [(3.0, 2.0, "shared phrase from suspect evidence")], validated=False)
-    prepared = corpus_index.prepare_index(HANDLE, chunk_tokens=20)
+    prepared = corpus_index.prepare_index(HANDLE, chunk_tokens=20, chunk_overlap=2)
 
     all_hits = corpus_index.search_index(
         HANDLE, "shared phrase", index_revision=prepared.index_revision, top_k=10
