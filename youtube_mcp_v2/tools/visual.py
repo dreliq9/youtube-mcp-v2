@@ -71,7 +71,7 @@ def corpus_visual_search(
 
         for hit in result.get("hits", []):
             resource = visual_resources.describe(
-                hit["frame_sha256"], PathLikeExt.from_path(hit["artifact_path"])
+                hit["frame_sha256"], hit["artifact_ext"]
             )
             hit.update(resource)
             if not resource["resource_portable"]:
@@ -102,18 +102,3 @@ def corpus_visual_search(
         return envelope.fail("visual_search_failed", str(exc))
 
     return envelope.ok(result, source="cache", warnings=list(dict.fromkeys(warnings)))
-
-
-class PathLikeExt:
-    """Tiny helper to keep resource format derived from the frozen artifact itself."""
-
-    @staticmethod
-    def from_path(path: str) -> str:
-        suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        if suffix == "jpeg":
-            suffix = "jpg"
-        if suffix not in {"png", "jpg"}:
-            raise visual_resources.VisualResourceError(
-                f"unsupported frozen visual artifact format: {suffix!r}"
-            )
-        return suffix
