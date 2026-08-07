@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from mcp import Client
+from mcp.types import BlobResourceContents
 
 from youtube_mcp_v2 import skeleton, visual_embeddings, visual_index, visual_resources
+from youtube_mcp_v2.server import mcp
 from youtube_mcp_v2.tools.visual import corpus_visual_search
 
 
@@ -58,9 +62,7 @@ class Backend:
         return [1.0, 0.0]
 
 
-def test_tool_auto_prepare_returns_portable_content_addressed_resource(
-    tmp_path, monkeypatch
-) -> None:
+def _tool_search(tmp_path, monkeypatch) -> tuple[Path, dict]:
     frame = _configure(tmp_path, monkeypatch)
     backend = Backend()
     monkeypatch.setattr(
@@ -68,7 +70,6 @@ def test_tool_auto_prepare_returns_portable_content_addressed_resource(
         "resolve_visual_backend",
         lambda mode, **_kwargs: backend,
     )
-
     env = corpus_visual_search(
         HANDLE,
         "red oscilloscope trace",
@@ -76,6 +77,13 @@ def test_tool_auto_prepare_returns_portable_content_addressed_resource(
         auto_prepare=True,
     )
     assert env["error"] is None
+    return frame, env
+
+
+def test_tool_auto_prepare_returns_portable_content_addressed_resource(
+    tmp_path, monkeypatch
+) -> None:
+    frame, env = _tool_search(tmp_path, monkeypatch)
     hit = env["data"]["hits"][0]
     expected_sha = hashlib.sha256(frame.read_bytes()).hexdigest()
     assert hit["frame_sha256"] == expected_sha
@@ -86,7 +94,24 @@ def test_tool_auto_prepare_returns_portable_content_addressed_resource(
     assert hit["resource_mime_type"] == "image/png"
     assert hit["resource_portable"] is True
     assert visual_resources.read(expected_sha, "png") == frame.read_bytes()
-    assert "red-oscilloscope" not in json.dumps(env)  # pixels are a resource, not tool text
+    assert "red-oscilloscope" not in json.dumps(env)
+
+
+@pytest.mark.asyncio
+async def test_visual_resource_round_trip_through_in_memory_mcp_client(
+    tmp_path, monkeypatch
+) -> None:
+    frame, env = _tool_search(tmp_path, monkeypatch)
+    uri = env["data"]["hits"][0]["resource_uri"]
+
+    async with Client(mcp) as client:
+        result = await client.read_resource(uri)
+
+    assert len(result.contents) == 1
+    content = result.contents[0]
+    assert isinstance(content, BlobResourceContents)
+    assert content.mime_type == "image/png"
+    assert base64.b64decode(content.blob) == frame.read_bytes()
 
 
 def test_visual_resource_limit_marks_tool_hit_nonportable(tmp_path, monkeypatch) -> None:
