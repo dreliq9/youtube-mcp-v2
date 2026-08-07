@@ -204,11 +204,15 @@ def tool_corpus_prepare(
     lang: str = "en",
     chunk_tokens: int = 500,
     chunk_overlap: int = 50,
+    semantic: Literal["off", "auto", "required"] = "auto",
 ) -> dict[str, Any]:
     """Prepare an immutable local evidence index for a frozen skeleton/corpus.
 
     USE WHEN: you expect to ask multiple questions across a frozen video set and
               want retrieval without loading every transcript into model context.
+    SEMANTIC: 'auto' uses an already-local dense model but never downloads one;
+              'required' explicitly opts into model initialization/download;
+              'off' builds the dependency-free lexical index.
     DOES NOT: fetch missing transcripts from YouTube. It indexes exact transcript
               revisions already present in the append-only cache and reports gaps.
     OUTPUT SHAPE: envelope wrapping corpus/index revision IDs, transcript coverage,
@@ -219,6 +223,7 @@ def tool_corpus_prepare(
         lang=lang,
         chunk_tokens=chunk_tokens,
         chunk_overlap=chunk_overlap,
+        semantic=semantic,
     )
 
 
@@ -231,18 +236,21 @@ def tool_corpus_search(
     index_revision: str | None = None,
     validated_only: bool = False,
     auto_prepare: bool = True,
+    semantic: Literal["off", "auto", "required"] = "auto",
 ) -> dict[str, Any]:
     """Retrieve timestamped evidence across a frozen corpus revision.
 
     USE WHEN: the answer may live anywhere across many already-cached video
               transcripts. Returns only top evidence chunks, not full transcripts.
+    SEMANTIC: 'auto' prefers an already-local hybrid index/model and otherwise
+              falls back to lexical; 'required' requires hybrid semantic retrieval;
+              'off' forces lexical retrieval.
     REPRODUCIBILITY: pass an explicit index_revision to pin the exact transcript
-                     row IDs/hashes that were searched. Omitting it uses the newest
-                     prepared index for the requested language.
+                     rows/hashes and retrieval model used by that index.
     OUTPUT SHAPE: envelope wrapping {corpus_revision, index_revision, query,
                   coverage, hits[]}. Each hit includes timestamp URL/excerpt,
-                  retrieval scores, transcript revision/hash/language/generated
-                  status/validation, and chunk hash.
+                  component/hybrid retrieval scores, transcript provenance and
+                  validation, transcript revision/hash, and chunk hash.
     """
     return _corpus_search(
         handle,
@@ -252,6 +260,7 @@ def tool_corpus_search(
         index_revision=index_revision,
         validated_only=validated_only,
         auto_prepare=auto_prepare,
+        semantic=semantic,
     )
 
 
