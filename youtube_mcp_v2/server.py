@@ -1,11 +1,4 @@
-"""MCPServer entrypoint. Registers v0.2.1 tools with namespaced names.
-
-Hard-cut migration: this server replaces the v0.1 `youtube` MCP entry. Tool names
-are intentionally NOT backwards-compatible — the LLM should learn the new namespace.
-
-Loads YOUTUBE_API_KEY from a project-local .env if present (BYO key — file is
-gitignored). The client config env block also works and takes precedence.
-"""
+"""MCPServer entrypoint. Registers namespaced YouTube research tools."""
 
 from __future__ import annotations
 
@@ -36,8 +29,10 @@ from .tools.corpus import (
     corpus_search as _corpus_search,
 )
 from .tools.visual import corpus_visual_search as _corpus_visual_search
+from .tools.clip_plan import corpus_clip_plan as _corpus_clip_plan
 from .tools.frame import frame_get as _frame_get
 from .tools.audio import audio_get as _audio_get
+from .tools.materialize import media_materialize as _media_materialize
 from .tools.api import (
     api_search as _api_search,
     api_channel_stats as _api_channel_stats,
@@ -63,9 +58,6 @@ def tool_inspect_video(url_or_id: str) -> dict[str, Any]:
     USE WHEN: you have a URL/id and need capabilities (transcript? language?
     duration? age-gated?) before deciding which heavy tool to call next.
     DO NOT USE WHEN: you've already inspected this id this session.
-    OUTPUT SHAPE: envelope wrapping { id, title, channel, duration_s, view_count,
-                  publish_date, lang_default, available_caption_langs[],
-                  has_transcript, age_gated, embed_allowed, livestream }.
     """
     return _inspect_video(url_or_id)
 
@@ -84,17 +76,7 @@ def tool_transcript_get(
     chunk_tokens: int = 500,
     chunk_overlap: int = 50,
 ) -> dict[str, Any]:
-    """Fetch a YouTube transcript in one of three shapes.
-
-    USE WHEN mode='text': consumer just needs the words, no timing.
-    USE WHEN mode='timed': consumer needs timestamps (jump to a moment, cut clips).
-    USE WHEN mode='chunked': long transcript that won't fit a single LLM call.
-    DO NOT USE: when you don't yet have a video id — call inspect.video first.
-    OUTPUT SHAPE: depends on mode. text → {text, word_count}; timed → {segments,
-                  next_cursor}; chunked → {chunks: [{i, n, start_s, end_s, text,
-                  token_estimate}]}. All modes include requested_lang, actual lang,
-                  and whether the caption track was generated when known.
-    """
+    """Fetch a YouTube transcript in text, timed, or chunked form."""
     return _transcript_get(
         url_or_id,
         mode=mode,
@@ -112,14 +94,7 @@ def tool_transcript_get(
 
 @mcp.tool(name="scrape.search")
 def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
-    """Search YouTube via page scraping. No API key needed.
-
-    USE WHEN: discovering videos by topic without a YOUTUBE_API_KEY.
-    DO NOT USE WHEN: YOUTUBE_API_KEY is set — call api.search instead for richer
-                     fields (channel ids, dates, no rate-limit quirks).
-    OUTPUT SHAPE: envelope wrapping list of {id, title, channel, channel_id,
-                  duration, views, published, url}.
-    """
+    """Search YouTube via page scraping. No API key needed."""
     return _scrape_search(query, n)
 
 
@@ -136,11 +111,6 @@ def tool_skeleton_build(
 ) -> dict[str, Any]:
     """Build a frozen reference of videos for a channel or topic.
 
-    USE WHEN target='channel': stable list of a creator's recent uploads to fan
-                               downstream calls against.
-    USE WHEN target='topic': frozen snapshot of search results for comparison or
-                             later evidence retrieval.
-    DO NOT USE WHEN: you only need a one-shot search — call scrape.search.
     For a deliberately mixed research set, use corpus.compose.
     """
     return _skeleton_build(target, value, limit)
@@ -171,7 +141,7 @@ def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — corpus composition and evidence retrieval
+# Tier 1 — corpus composition, retrieval, and edit planning
 # ---------------------------------------------------------------------------
 
 
@@ -183,17 +153,7 @@ def tool_corpus_compose(
     base_handle: str | None = None,
     remove: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Freeze an arbitrary heterogeneous research set without live acquisition.
-
-    USE WHEN: relevant evidence spans creators, topics, disciplines, or previously
-              frozen corpora rather than one channel/search result set.
-    SOURCES: combine an optional base corpus, multiple include_handles, and direct
-             video URLs/IDs; remove selected members in the same immutable revision.
-    ORDER: base → included corpora → explicit videos → removals; duplicate IDs keep
-           their first occurrence.
-    DOES NOT: search YouTube, inspect videos, or mutate source corpora. New direct
-              videos use cached metadata when available and can be hydrated later.
-    """
+    """Freeze an arbitrary heterogeneous research set without live acquisition."""
     return _corpus_compose(
         label,
         videos=videos,
@@ -232,13 +192,7 @@ def tool_corpus_search(
     auto_prepare: bool = True,
     semantic: Literal["off", "auto", "required"] = "auto",
 ) -> dict[str, Any]:
-    """Retrieve timestamped spoken evidence across a frozen corpus revision.
-
-    Hybrid retrieval preserves lexical signals for exact evidence such as names,
-    dates, quotations, statute/case identifiers, quantities, citations, prices,
-    scientific notation, product/model identifiers, game/UI terms, and error codes,
-    while semantic ranking handles paraphrases and conceptual similarity.
-    """
+    """Retrieve timestamped spoken evidence across a frozen corpus revision."""
     return _corpus_search(
         handle,
         query,
@@ -260,15 +214,7 @@ def tool_corpus_visual_search(
     auto_prepare: bool = True,
     visual: Literal["auto", "required"] = "auto",
 ) -> dict[str, Any]:
-    """Search timestamped on-screen evidence across already-cached corpus frames.
-
-    USE WHEN: relevant evidence may be visible but not spoken — maps, charts,
-              diagrams, slides, physical demonstrations, products, artwork, game/UI
-              states, captions rendered into pixels, or other visual scenes.
-    VISUAL: 'auto' uses paired text/image models only when already local and never
-            downloads them; 'required' explicitly opts into model initialization.
-    DOES NOT: download videos or create missing frames.
-    """
+    """Search timestamped on-screen evidence across already-cached corpus frames."""
     return _corpus_visual_search(
         handle,
         query,
@@ -276,6 +222,42 @@ def tool_corpus_visual_search(
         visual_index_revision=visual_index_revision,
         auto_prepare=auto_prepare,
         visual=visual,
+    )
+
+
+@mcp.tool(name="corpus.clip_plan")
+def tool_corpus_clip_plan(
+    handle: str,
+    query: str,
+    target_duration_s: float = 60.0,
+    max_clips: int = 8,
+    min_clip_duration_s: float = 4.0,
+    max_clip_duration_s: float = 20.0,
+    context_before_s: float = 2.0,
+    context_after_s: float = 2.0,
+    lang: str = "en",
+    validated_only: bool = False,
+    modalities: Literal["auto", "transcript", "visual", "both"] = "auto",
+) -> dict[str, Any]:
+    """Create an immutable editor-neutral shot/clip plan from corpus evidence.
+
+    USE WHEN: the goal is to turn retrieved moments into a highlight reel, montage,
+              documentary assembly, explainer, comparison, or other remix workflow.
+    DOES NOT: download source video or edit/render anything. It freezes ranked source
+              ranges and evidence provenance. Call media.materialize explicitly next.
+    """
+    return _corpus_clip_plan(
+        handle,
+        query,
+        target_duration_s=target_duration_s,
+        max_clips=max_clips,
+        min_clip_duration_s=min_clip_duration_s,
+        max_clip_duration_s=max_clip_duration_s,
+        context_before_s=context_before_s,
+        context_after_s=context_after_s,
+        lang=lang,
+        validated_only=validated_only,
+        modalities=modalities,
     )
 
 
@@ -298,7 +280,7 @@ def resource_visual_jpg(sha256: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — frame/audio extraction (yt-dlp + ffmpeg)
+# Tier 1 — media extraction / explicit editor materialization
 # ---------------------------------------------------------------------------
 
 
@@ -312,13 +294,7 @@ def tool_frame_get(
     size: str = "1280x720",
     fmt: Literal["png", "jpg"] = "png",
 ) -> dict[str, Any]:
-    """Extract one frame or a contact sheet from a YouTube video.
-
-    USE WHEN mode='single': inspect a specific timestamp as an image.
-    USE WHEN mode='sheet': scene-skimming across documentaries, lectures, reviews,
-                           tutorials, interviews, performances, games, or other video.
-    DO NOT USE WHEN: you only need text — call transcript.get instead.
-    """
+    """Extract one frame or a contact sheet from a YouTube video."""
     return _frame_get(
         url_or_id, mode=mode, timestamp_s=timestamp_s,
         n=n, layout=layout, size=size, fmt=fmt,
@@ -340,6 +316,26 @@ def tool_audio_get(
         sample_rate=sample_rate,
         start_s=start_s,
         end_s=end_s,
+    )
+
+
+@mcp.tool(name="media.materialize")
+def tool_media_materialize(
+    plan_revision: str,
+    max_height: Literal[360, 480, 720, 1080] = 720,
+    clip_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Materialize planned source ranges as editor-ready local MP4 assets.
+
+    HEAVY/NETWORK BOUNDARY: this is the explicit acquisition step. Each source video
+    is downloaded at most once per call, selected ranges are frame-accurately
+    re-encoded, and output SHA-256/source provenance are recorded. The resulting
+    manifest is designed for handoff to local editing MCPs such as Declip/FCP-MCP.
+    """
+    return _media_materialize(
+        plan_revision,
+        max_height=max_height,
+        clip_ids=clip_ids,
     )
 
 
@@ -385,6 +381,7 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
     "skeleton.{build,list,get,expire,index}, "
-    "corpus.{compose,prepare,search,visual_search}, frame.get, audio.get | tier-2: "
+    "corpus.{compose,prepare,search,visual_search,clip_plan}, "
+    "frame.get, audio.get, media.materialize | tier-2: "
     "api.{search,channel_stats,trending,video_categories}"
 )
