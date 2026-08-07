@@ -2,7 +2,7 @@
 
 A disciplined YouTube MCP for **evidence-grade, domain-neutral video research**.
 
-The product goal is not "more YouTube API wrappers" and it is not an engineering-specific workflow. It is a trustworthy interface to **knowledge that happens to be encoded in video**: discover sources, freeze or compose a research corpus, acquire evidence, and retrieve the exact spoken or visual moments needed by a reasoning model.
+The product goal is not "more YouTube API wrappers" and it is not an engineering-specific workflow. It is a trustworthy interface to **knowledge that happens to be encoded in video**: discover sources, freeze or compose a research corpus, acquire evidence, retrieve the exact spoken or visual moments needed by a reasoning model, and hand selected moments to downstream tools without turning the research MCP into an editor.
 
 See `PRODUCT_THESIS.md` for the full product framing.
 
@@ -30,6 +30,8 @@ Engineering examples are useful stress tests, but engineering has no privileged 
 - **Frozen and composable research sets** — multi-step research should be reproducible even when the source universe mixes unrelated domains.
 - **Pinned retrieval inputs** — indexes record exact evidence revisions/hashes and model identity.
 - **Hybrid exact + semantic retrieval** — paraphrases matter, but so do exact names, dates, quotations, citations, quantities, prices, scores, notation, UI labels, model numbers, and codes.
+- **Explicit heavy-work boundaries** — planning/search never quietly becomes source-video download or rendering.
+- **Editor-neutral handoff** — source selection and evidence stay independent of Declip, Final Cut Pro, or any other editing system.
 - **Failure containment** — fragile upstreams and binaries are bounded and errors are structured.
 - **Never overwrite history** — new observations/research revisions are appended rather than destructively rewritten.
 - **Small public tool surface** — agent jobs, not internal implementation details, earn tools.
@@ -38,12 +40,12 @@ Engineering examples are useful stress tests, but engineering has no privileged 
 
 | Tier | Prefix | Auth | Cost |
 |---|---|---|---|
-| 1 | `inspect.*`, `transcript.*`, `frame.*`, `audio.*`, `scrape.*`, `skeleton.*`, `corpus.*` | none | free/local compute |
+| 1 | `inspect.*`, `transcript.*`, `frame.*`, `audio.*`, `media.*`, `scrape.*`, `skeleton.*`, `corpus.*` | none | free/local compute plus explicit media acquisition |
 | 2 | `api.*` | `YOUTUBE_API_KEY` | YouTube quota |
 
 One documented exception: `skeleton.build(target='channel')` upgrades to Data API enumeration when an API key is present. Provenance reports which path ran.
 
-## Tools (18)
+## Tools (20)
 
 ### Pre-flight
 
@@ -72,8 +74,6 @@ Historical `skeleton.*` handles are valid corpus revision identifiers.
 - `corpus.compose(label, videos=None, include_handles=None, base_handle=None, remove=None)`
 
 `corpus.compose` creates a first-class immutable `collection` revision from arbitrary video URLs/IDs and/or multiple already-frozen corpora. It can also derive a revised set from an existing corpus and apply removals without mutating the parent.
-
-This is the cross-domain source-selection primitive. For example, an AI can intentionally combine a documentary corpus, several interview corpora, a cooking demonstration, a sports analysis, and curated direct videos into one research universe.
 
 Composition performs **no live YouTube acquisition**. New direct videos use cached metadata when available and can be inspected/hydrated later. See `CORPUS_COMPOSITION.md`.
 
@@ -104,7 +104,20 @@ Visual search is for evidence that may never be spoken: maps, slides, diagrams, 
 
 - `audio.get(url_or_id, ...)` — cached audio for downstream speech/music/acoustic analysis.
 
-## Example cross-domain workflow
+### Editor handoff
+
+- `corpus.clip_plan(handle, query, target_duration_s=60, max_clips=8, ...)`
+- `media.materialize(plan_revision, max_height=720, clip_ids=None)`
+
+`corpus.clip_plan` converts ranked frozen evidence into a content-addressed `youtube-mcp.clip-plan/v1` artifact. It selects bounded source ranges, preserves the supporting evidence and source/index revisions, deduplicates heavily overlapping candidates, and writes **no source media**.
+
+`media.materialize` is the explicit heavy/network step. It loads a clip-plan revision, groups ranges by source video, downloads each required source at most once during the call, and emits editor-ready H.264/AAC MP4s plus SHA-256/source provenance in a `youtube-mcp.materialized-clip-plan/v1` manifest.
+
+The resulting asset paths are deliberately editor-neutral. Declip can map each asset directly to `{asset, start:'auto', trim_in:0, trim_out:duration_s}`. FCP-MCP can map the same assets to its montage/rough-cut source list and continue through its normal reviewable FCPXML workflow.
+
+See `EDITOR_HANDOFF.md` for the exact contract and example Declip/FCP-MCP mappings.
+
+## Example cross-domain research workflow
 
 ```text
 history = skeleton.build("topic", "productive failure in history")
@@ -121,7 +134,22 @@ corpus.prepare(mixed, semantic="auto")
 corpus.search(mixed, "when does failure become useful rather than destructive?")
 ```
 
-The calling model can synthesize the returned evidence; the MCP's job is to make the source set and evidence auditable.
+## Example remix workflow
+
+```text
+mixed = corpus.compose(...)
+plan = corpus.clip_plan(
+  mixed,
+  "how do different people describe a frontier?",
+  target_duration_s=90,
+  max_clips=8
+)
+assets = media.materialize(plan.plan_revision, max_height=720)
+
+# hand assets.manifest_path / assets[] to Declip or FCP-MCP
+```
+
+The calling model remains responsible for creative intent, ordering decisions, transitions, titles, music, commentary, and publication judgment. youtube-mcp provides the traceable source moments and media handoff.
 
 ## Response envelope
 
@@ -149,11 +177,13 @@ Storage is XDG-aware: `$XDG_CACHE_HOME/youtube-mcp` when a valid absolute XDG ca
 - channel/topic/collection snapshots live under `skeletons/`,
 - `chan-*`, `topic-*`, and `set-*` handles remain independently queryable,
 - corpus search indexes are content-addressed immutable SQLite artifacts,
-- visual evidence is frozen by SHA-256 before indexing.
+- visual evidence is frozen by SHA-256 before indexing,
+- clip plans live under `edit-plans/`,
+- materialized editor clips live under `editor-clips/` and are SHA-256 identified in materialized manifests.
 
 ## Install
 
-Requires Python 3.10+. Media extraction also requires `ffmpeg` in `PATH`.
+Requires Python 3.10+. Media extraction/materialization also requires `ffmpeg` in `PATH`.
 
 ```bash
 pip install git+https://github.com/dreliq9/youtube-mcp-v2.git
@@ -166,7 +196,7 @@ pip install "youtube-mcp-v2[api,media,semantic] @ git+https://github.com/dreliq9
 ```
 
 - `api` — YouTube Data API adapter,
-- `media` — yt-dlp frame/audio acquisition,
+- `media` — yt-dlp frame/audio/editor-clip acquisition,
 - `semantic` — FastEmbed/ONNX semantic transcript and paired visual embeddings.
 
 ## Quality gates
@@ -184,13 +214,15 @@ The public benchmark varies across **two axes**:
 
 A server should not claim to be "best" because it performs well on one subject class. Benchmark reporting is broken out by history/documentary, humanities, science/technology, current-affairs source material, cooking/craft, products, creative/culture, tutorials, sports/games, long-form interviews, and cross-domain synthesis.
 
+Editor-handoff benchmarks should additionally measure source-range precision, plan reproducibility, materialization success, number of downloads per source, and whether downstream editor adapters can consume the manifest without losing source provenance.
+
 See `BENCHMARK.md`.
 
 ## Roadmap
 
 - **v0.3** — reliable acquisition + first-class corpus composition,
 - **v0.4** — reproducible transcript evidence retrieval,
-- **v0.5** — multimodal temporal evidence (visual/OCR/scene-aware),
+- **v0.5** — multimodal temporal evidence plus editor-neutral clip handoff,
 - **v0.6** — distribution and remote operation,
 - **v0.7** — compact compound research workflows.
 
