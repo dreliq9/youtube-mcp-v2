@@ -141,24 +141,40 @@ def _resolve_duration(video_id: str) -> int | float | None:
     return None
 
 
+def _safe_json_object(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _cache_provenance(row: dict[str, Any]) -> dict[str, Any] | None:
     provider = row.get("provider")
     method = row.get("method")
     attempts_raw = row.get("attempts_json")
-    if provider is None and method is None and not attempts_raw:
+    details_raw = row.get("details_json")
+    if provider is None and method is None and not attempts_raw and not details_raw:
         # Historical v0.2 row: do not fabricate provenance that was never stored.
         return None
     try:
         attempts = json.loads(attempts_raw) if attempts_raw else []
     except json.JSONDecodeError:
         attempts = []
-    return {
-        "acquisition": {
-            "provider": provider,
-            "method": method,
-            "attempts": attempts,
-        }
+    if not isinstance(attempts, list):
+        attempts = []
+
+    acquisition: dict[str, Any] = {
+        "provider": provider,
+        "method": method,
+        "attempts": attempts,
     }
+    details = _safe_json_object(details_raw)
+    if details is not None:
+        acquisition["details"] = details
+    return {"acquisition": acquisition}
 
 
 def _failure_envelope(
@@ -167,6 +183,18 @@ def _failure_envelope(
     exc: transcript_acquisition.TranscriptAcquisitionFailed,
 ) -> dict[str, Any]:
     primary = exc.primary_error
+
+    # If local STT was explicitly configured and actually attempted but failed,
+    # caption absence/disablement is no longer the definitive terminal condition.
+    # The user may be able to repair a missing binary/model/audio path and retry.
+    if exc.local_stt_error is not None:
+        return envelope.fail(
+            "transcript_fetch_failed",
+            "caption providers and configured local STT failed; see provenance attempts",
+            recoverable=True,
+            provenance=exc.provenance,
+        )
+
     if isinstance(primary, transcript_api.TranscriptsDisabled):
         return envelope.fail(
             "transcripts_disabled",
@@ -206,8 +234,9 @@ def transcript_get(
 ) -> dict[str, Any]:
     """Fetch a YouTube transcript in one of three shapes.
 
-    Live acquisition is provider-independent: the primary caption client is tried
-    first and yt-dlp captions are tried second. Provenance records every attempt.
+    Live acquisition is provider-independent: caption providers are tried first;
+    an explicitly configured local whisper.cpp model is the final fallback.
+    Provenance records every attempted provider and local model/audio identity.
     """
     try:
         video_id = parse_video_id(url_or_id)
@@ -301,6 +330,7 @@ def transcript_get(
         provider=acquired.provider,
         method=acquired.method,
         attempts=attempts,
+        details=acquired.details,
         text=text,
         segments=segments,
         word_count=len(text.split()),
