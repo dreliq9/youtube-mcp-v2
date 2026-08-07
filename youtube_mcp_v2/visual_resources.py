@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-from pathlib import Path
 
 from . import visual_index
 
@@ -75,6 +75,8 @@ def read(sha256: str, ext: str) -> bytes:
             f"visual artifact is {size} bytes; resource limit is {limit} bytes"
         )
     payload = path.read_bytes()
-    if visual_index._sha256_file(path) != normalized_sha:
+    # Verify the bytes we are actually about to return, not a second filesystem
+    # read after the payload was captured.
+    if hashlib.sha256(payload).hexdigest() != normalized_sha:
         raise VisualResourceError("frozen visual artifact failed integrity check")
     return payload
