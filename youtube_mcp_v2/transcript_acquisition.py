@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any
 
-from .adapters import transcript_api, ytdlp_transcript
+from .adapters import transcript_api, whisper_cpp, ytdlp_transcript
 from .adapters.transcript_api import TranscriptFetch
 
 
@@ -39,16 +39,18 @@ class AcquisitionResult:
     provider: str
     method: str
     attempts: list[AcquisitionAttempt]
+    details: dict[str, Any] | None = None
 
     @property
     def provenance(self) -> dict[str, Any]:
-        return {
-            "acquisition": {
-                "provider": self.provider,
-                "method": self.method,
-                "attempts": [attempt.as_dict() for attempt in self.attempts],
-            }
+        acquisition: dict[str, Any] = {
+            "provider": self.provider,
+            "method": self.method,
+            "attempts": [attempt.as_dict() for attempt in self.attempts],
         }
+        if self.details is not None:
+            acquisition["details"] = self.details
+        return {"acquisition": acquisition}
 
 
 class TranscriptAcquisitionFailed(RuntimeError):
@@ -59,11 +61,13 @@ class TranscriptAcquisitionFailed(RuntimeError):
         attempts: list[AcquisitionAttempt],
         primary_error: Exception | None,
         fallback_error: Exception | None,
+        local_stt_error: Exception | None = None,
     ) -> None:
         super().__init__(message)
         self.attempts = attempts
         self.primary_error = primary_error
         self.fallback_error = fallback_error
+        self.local_stt_error = local_stt_error
 
     @property
     def provenance(self) -> dict[str, Any]:
@@ -115,20 +119,29 @@ def _fallback_failure_detail(exc: Exception) -> tuple[str, str]:
     return "error", "provider_error"
 
 
+def _local_stt_failure_detail(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, whisper_cpp.LocalSttUnavailable):
+        return "unavailable", "local_stt_unavailable"
+    if isinstance(exc, whisper_cpp.LocalSttTimeout):
+        return "timeout", "local_stt_timeout"
+    return "error", "local_stt_failed"
+
+
 def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
-    """Acquire captions through independent providers, preserving attempt history.
+    """Acquire a transcript through independent providers with attempt history.
 
     Waterfall:
-      1. youtube-transcript-api
+      1. youtube-transcript-api captions
       2. yt-dlp caption extraction
+      3. local whisper.cpp STT, only when a model path is explicitly configured
 
     Cache lookup remains above this layer because a cache hit should avoid all
-    upstream acquisition. Local STT can be added as provider 3 without changing
-    the public transcript tool contract.
+    upstream/local acquisition work. Local STT never downloads a model implicitly.
     """
     attempts: list[AcquisitionAttempt] = []
     primary_error: Exception | None = None
     fallback_error: Exception | None = None
+    local_stt_error: Exception | None = None
 
     started = monotonic()
     try:
@@ -192,9 +205,63 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
             attempts=attempts,
         )
 
+    # The model path is the explicit opt-in. If no model is configured, preserve
+    # the existing two-provider behavior and do not report a phantom STT attempt.
+    try:
+        local_settings = whisper_cpp.settings_from_env()
+    except Exception as exc:
+        local_stt_error = exc
+        outcome, detail = _local_stt_failure_detail(exc)
+        attempts.append(
+            AcquisitionAttempt(
+                provider="whisper.cpp",
+                method="local_stt",
+                duration_ms=0,
+                outcome=outcome,
+                detail_code=detail,
+            )
+        )
+    else:
+        if local_settings is not None:
+            started = monotonic()
+            try:
+                local = whisper_cpp.transcribe_video(
+                    video_id,
+                    settings=local_settings,
+                )
+            except Exception as exc:
+                local_stt_error = exc
+                outcome, detail = _local_stt_failure_detail(exc)
+                attempts.append(
+                    AcquisitionAttempt(
+                        provider="whisper.cpp",
+                        method="local_stt",
+                        duration_ms=_elapsed_ms(started),
+                        outcome=outcome,
+                        detail_code=detail,
+                    )
+                )
+            else:
+                attempts.append(
+                    AcquisitionAttempt(
+                        provider="whisper.cpp",
+                        method="local_stt",
+                        duration_ms=_elapsed_ms(started),
+                        outcome="success",
+                    )
+                )
+                return AcquisitionResult(
+                    fetch=local.fetch,
+                    provider="whisper.cpp",
+                    method="local_stt",
+                    attempts=attempts,
+                    details=local.provenance,
+                )
+
     raise TranscriptAcquisitionFailed(
         "all transcript acquisition providers failed",
         attempts=attempts,
         primary_error=primary_error,
         fallback_error=fallback_error,
+        local_stt_error=local_stt_error,
     )

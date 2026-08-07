@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS transcripts (
     provider TEXT,
     method TEXT,
     attempts_json TEXT,
+    details_json TEXT,
     text TEXT NOT NULL,
     segments_json TEXT,
     word_count INTEGER,
@@ -80,6 +81,7 @@ def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
         "provider": "TEXT",
         "method": "TEXT",
         "attempts_json": "TEXT",
+        "details_json": "TEXT",
     }
     for name, sql_type in additions.items():
         if name not in columns:
@@ -133,19 +135,22 @@ def put_transcript(
     provider: str | None = None,
     method: str | None = None,
     attempts: list[dict[str, Any]] | None = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
     """Append one transcript revision with the acquisition path that produced it.
 
     `lang` is the requested language and remains the lookup key. `actual_lang`
-    records the track that was actually returned after fallback.
+    records the track that was actually returned after fallback. Provider-specific
+    `details` must already be safe for MCP exposure (for example hashes/model
+    identity, never local filesystem paths or credentials).
     """
     with connect() as conn:
         conn.execute(
             "INSERT INTO transcripts "
             "(video_id, lang, actual_lang, is_generated, provider, method, "
-            " attempts_json, text, segments_json, word_count, fetched_at, "
+            " attempts_json, details_json, text, segments_json, word_count, fetched_at, "
             " validated, warnings_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 video_id,
                 lang,
@@ -154,6 +159,7 @@ def put_transcript(
                 provider,
                 method,
                 json.dumps(attempts) if attempts is not None else None,
+                json.dumps(details) if details is not None else None,
                 text,
                 json.dumps(segments) if segments is not None else None,
                 word_count,
