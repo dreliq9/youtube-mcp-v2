@@ -46,9 +46,10 @@ def media_materialize(
         warnings.append(
             "this is a partial materialization; call media.materialize again with remaining clip_ids if the full plan is needed"
         )
+    all_cached = all(bool(asset.get("cached")) for asset in manifest.get("assets") or [])
     return envelope.ok(
         manifest,
-        source="yt-dlp+ffmpeg",
+        source="cache" if all_cached else "scrape",
         validated=True,
         warnings=warnings,
     )
