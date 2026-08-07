@@ -2,8 +2,8 @@
 
 Ordinary frame cache files are acquisition artifacts and may be rebuilt. Visual
 indexes therefore snapshot every indexed frame into a content-addressed artifact
-store before embedding it. The immutable index records only corpus/frame/model
-identity and never depends on a mutable frame-cache pathname for evidence.
+store before embedding it. The immutable index records corpus/frame/model identity
+and never depends on a mutable frame-cache pathname for evidence.
 """
 
 from __future__ import annotations
@@ -110,42 +110,75 @@ def _artifact_path(sha256: str, ext: str) -> Path:
 
 
 def _snapshot_frame(source: Path) -> tuple[str, str, Path]:
+    """Freeze one mutable frame-cache file into the content-addressed store."""
     ext = source.suffix.lower().lstrip(".")
     if ext == "jpeg":
         ext = "jpg"
     if ext not in {"png", "jpg"}:
         raise VisualIndexError(f"unsupported cached frame format: {source.suffix!r}")
+
     sha256 = _sha256_file(source)
     target = _artifact_path(sha256, ext)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         if not target.is_file() or _sha256_file(target) != sha256:
-            raise VisualIndexError(f"content-addressed visual artifact is corrupt: {sha256}")
+            raise VisualIndexError(
+                f"content-addressed visual artifact is corrupt: {sha256}"
+            )
         return sha256, ext, target
 
     try:
-        fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o444)
+        fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
-        if _sha256_file(target) != sha256:
-            raise VisualIndexError(f"content-addressed visual artifact is corrupt: {sha256}")
+        if not target.is_file() or _sha256_file(target) != sha256:
+            raise VisualIndexError(
+                f"content-addressed visual artifact is corrupt: {sha256}"
+            )
         return sha256, ext, target
 
     try:
         with os.fdopen(fd, "wb") as out, source.open("rb") as src:
             shutil.copyfileobj(src, out, length=1024 * 1024)
+        if _sha256_file(target) != sha256:
+            raise VisualIndexError("visual artifact snapshot hash verification failed")
+        try:
+            target.chmod(0o444)
+        except OSError:
+            # Read-only is defense in depth; content hash verification remains the
+            # actual evidence-integrity boundary on filesystems without chmod.
+            pass
     except Exception:
         try:
             target.unlink()
         except OSError:
             pass
         raise
-    if _sha256_file(target) != sha256:
-        try:
-            target.unlink()
-        except OSError:
-            pass
-        raise VisualIndexError("visual artifact snapshot hash verification failed")
     return sha256, ext, target
+
+
+def _publish_immutable(tmp: Path, path: Path) -> None:
+    """Publish a completed visual index without replacing an existing revision."""
+    try:
+        os.link(tmp, path)
+        return
+    except FileExistsError:
+        return
+    except OSError:
+        # Hard links are not guaranteed on every supported filesystem. Claim the
+        # path with O_EXCL, then copy only after we own that pathname.
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return
+        try:
+            with os.fdopen(fd, "wb") as out, tmp.open("rb") as src:
+                shutil.copyfileobj(src, out, length=1024 * 1024)
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
 
 
 def _safe_cached_frame(video_dir: Path, raw_path: str) -> Path | None:
@@ -200,7 +233,9 @@ def _single_frames(video_dir: Path) -> list[tuple[float, Path, str]]:
     return found
 
 
-def discover_frames(handle: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+def discover_frames(
+    handle: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     """Snapshot all trustworthy already-cached timestamped frames for a corpus."""
     corpus = skeleton.load_skeleton(handle)
     videos = corpus.get("videos")
@@ -226,13 +261,10 @@ def discover_frames(handle: str) -> tuple[dict[str, Any], list[dict[str, Any]], 
             continue
 
         candidates = [*_manifest_frames(video_dir), *_single_frames(video_dir)]
-        # A source file can appear in multiple manifests; one pixel artifact at one
-        # timestamp should enter the immutable visual evidence set only once.
         dedup: dict[tuple[str, float], dict[str, Any]] = {}
         for timestamp_s, source_path, source_kind in candidates:
             sha256, ext, artifact = _snapshot_frame(source_path)
-            key = (sha256, timestamp_s)
-            dedup[key] = {
+            dedup[(sha256, timestamp_s)] = {
                 "video_id": video_id,
                 "title": video.get("title"),
                 "channel": video.get("channel"),
@@ -437,13 +469,12 @@ def prepare_visual_index(
         conn.close()
 
     try:
-        os.replace(tmp, path)
-    except Exception:
+        _publish_immutable(tmp, path)
+    finally:
         try:
             tmp.unlink()
         except OSError:
             pass
-        raise
     return _prepared(path, cached=False)
 
 
@@ -517,7 +548,10 @@ def search_visual_index(
         raise VisualIndexError("visual backend failed while embedding query") from exc
 
     meta = _read_meta(prepared.path)
-    stored_dim = int(meta.get("embedding_dim", "0"))
+    try:
+        stored_dim = int(meta.get("embedding_dim", "0"))
+    except ValueError as exc:
+        raise VisualIndexError("visual index has invalid embedding dimension") from exc
     if stored_dim and len(query_vector) != stored_dim:
         raise VisualIndexError(
             f"visual query dim {len(query_vector)} does not match index dim {stored_dim}"
@@ -533,6 +567,8 @@ def search_visual_index(
     ranked: list[tuple[float, sqlite3.Row]] = []
     for row in rows:
         vector = _unpack_vector(row["embedding"], row["embedding_dim"])
+        if len(vector) != len(query_vector):
+            raise VisualIndexError("visual frame embedding dimension is inconsistent")
         score = sum(a * b for a, b in zip(query_vector, vector))
         ranked.append((score, row))
     ranked.sort(
@@ -548,7 +584,8 @@ def search_visual_index(
     hits: list[dict[str, Any]] = []
     for rank, (score, row) in enumerate(ranked, start=1):
         timestamp_s = float(row["timestamp_s"])
-        artifact = _artifact_path(row["frame_sha256"], row["artifact_ext"])
+        artifact_ext = str(row["artifact_ext"])
+        artifact = _artifact_path(row["frame_sha256"], artifact_ext)
         if not artifact.is_file() or _sha256_file(artifact) != row["frame_sha256"]:
             raise VisualIndexError(
                 f"frozen visual artifact failed integrity check: {row['frame_sha256']}"
@@ -565,6 +602,7 @@ def search_visual_index(
                     f"&t={max(0, int(timestamp_s))}s"
                 ),
                 "artifact_path": str(artifact),
+                "artifact_ext": artifact_ext,
                 "frame_sha256": row["frame_sha256"],
                 "source_kind": row["source_kind"],
                 "score": score,
