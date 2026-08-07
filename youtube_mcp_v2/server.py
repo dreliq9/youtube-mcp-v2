@@ -21,6 +21,7 @@ from mcp.server import MCPServer
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
+from . import visual_resources
 from .tools.inspect import inspect_video as _inspect_video
 from .tools.transcript import transcript_get as _transcript_get
 from .tools.scrape import scrape_search as _scrape_search
@@ -35,6 +36,7 @@ from .tools.corpus import (
     corpus_prepare as _corpus_prepare,
     corpus_search as _corpus_search,
 )
+from .tools.visual import corpus_visual_search as _corpus_visual_search
 from .tools.frame import frame_get as _frame_get
 from .tools.audio import audio_get as _audio_get
 from .tools.api import (
@@ -264,6 +266,57 @@ def tool_corpus_search(
     )
 
 
+@mcp.tool(name="corpus.visual_search")
+def tool_corpus_visual_search(
+    handle: str,
+    query: str,
+    top_k: int = 10,
+    visual_index_revision: str | None = None,
+    auto_prepare: bool = True,
+    visual: Literal["auto", "required"] = "auto",
+) -> dict[str, Any]:
+    """Search timestamped on-screen evidence across already-cached corpus frames.
+
+    USE WHEN: the evidence may be visible on screen even when it is not spoken —
+              charts, hardware, diagrams, products, UI, text rendered as pixels.
+    VISUAL: 'auto' uses paired text/image models only when already local and never
+            downloads them; 'required' explicitly opts into model initialization.
+    DOES NOT: download videos or create missing frames. auto_prepare only freezes
+              and indexes trustworthy timestamped frames already in the managed cache.
+    REPRODUCIBILITY: pin visual_index_revision to preserve exact frame SHA-256s and
+                     paired model identity. Hits expose content-addressed MCP image
+                     resources so remote clients need not share the server filesystem.
+    """
+    return _corpus_visual_search(
+        handle,
+        query,
+        top_k=top_k,
+        visual_index_revision=visual_index_revision,
+        auto_prepare=auto_prepare,
+        visual=visual,
+    )
+
+
+# Frozen visual evidence is protocol-native: the URI names the exact image hash,
+# not a mutable frame-cache pathname.
+@mcp.resource(
+    "youtube-mcp://evidence/frame/png/{sha256}",
+    mime_type="image/png",
+)
+def resource_visual_png(sha256: str) -> bytes:
+    """Read one frozen content-addressed PNG evidence frame."""
+    return visual_resources.read(sha256, "png")
+
+
+@mcp.resource(
+    "youtube-mcp://evidence/frame/jpg/{sha256}",
+    mime_type="image/jpeg",
+)
+def resource_visual_jpg(sha256: str) -> bytes:
+    """Read one frozen content-addressed JPEG evidence frame."""
+    return visual_resources.read(sha256, "jpg")
+
+
 # ---------------------------------------------------------------------------
 # Tier 1 — frame/audio extraction (yt-dlp + ffmpeg)
 # ---------------------------------------------------------------------------
@@ -390,7 +443,7 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,expire,index}, corpus.{prepare,search}, "
+    "skeleton.{build,list,get,expire,index}, corpus.{prepare,search,visual_search}, "
     "frame.get, audio.get | tier-2: "
     "api.{search,channel_stats,trending,video_categories}"
 )
