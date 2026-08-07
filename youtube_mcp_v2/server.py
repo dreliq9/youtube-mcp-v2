@@ -31,6 +31,10 @@ from .tools.skeleton_tools import (
     skeleton_expire as _skeleton_expire,
     skeleton_index as _skeleton_index,
 )
+from .tools.corpus import (
+    corpus_prepare as _corpus_prepare,
+    corpus_search as _corpus_search,
+)
 from .tools.frame import frame_get as _frame_get
 from .tools.audio import audio_get as _audio_get
 from .tools.api import (
@@ -190,6 +194,68 @@ def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Tier 1 — frozen-corpus evidence retrieval
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="corpus.prepare")
+def tool_corpus_prepare(
+    handle: str,
+    lang: str = "en",
+    chunk_tokens: int = 500,
+    chunk_overlap: int = 50,
+) -> dict[str, Any]:
+    """Prepare an immutable local evidence index for a frozen skeleton/corpus.
+
+    USE WHEN: you expect to ask multiple questions across a frozen video set and
+              want retrieval without loading every transcript into model context.
+    DOES NOT: fetch missing transcripts from YouTube. It indexes exact transcript
+              revisions already present in the append-only cache and reports gaps.
+    OUTPUT SHAPE: envelope wrapping corpus/index revision IDs, transcript coverage,
+                  missing video IDs, chunk count, and backend/model identity.
+    """
+    return _corpus_prepare(
+        handle,
+        lang=lang,
+        chunk_tokens=chunk_tokens,
+        chunk_overlap=chunk_overlap,
+    )
+
+
+@mcp.tool(name="corpus.search")
+def tool_corpus_search(
+    handle: str,
+    query: str,
+    top_k: int = 10,
+    lang: str = "en",
+    index_revision: str | None = None,
+    validated_only: bool = False,
+    auto_prepare: bool = True,
+) -> dict[str, Any]:
+    """Retrieve timestamped evidence across a frozen corpus revision.
+
+    USE WHEN: the answer may live anywhere across many already-cached video
+              transcripts. Returns only top evidence chunks, not full transcripts.
+    REPRODUCIBILITY: pass an explicit index_revision to pin the exact transcript
+                     row IDs/hashes that were searched. Omitting it uses the newest
+                     prepared index for the requested language.
+    OUTPUT SHAPE: envelope wrapping {corpus_revision, index_revision, query,
+                  coverage, hits[]}. Each hit includes timestamp URL/excerpt,
+                  retrieval scores, transcript revision/hash/language/generated
+                  status/validation, and chunk hash.
+    """
+    return _corpus_search(
+        handle,
+        query,
+        top_k=top_k,
+        lang=lang,
+        index_revision=index_revision,
+        validated_only=validated_only,
+        auto_prepare=auto_prepare,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tier 1 — frame/audio extraction (yt-dlp + ffmpeg)
 # ---------------------------------------------------------------------------
 
@@ -315,6 +381,7 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,expire,index}, frame.get, audio.get | "
-    "tier-2: api.{search,channel_stats,trending,video_categories}"
+    "skeleton.{build,list,get,expire,index}, corpus.{prepare,search}, "
+    "frame.get, audio.get | tier-2: "
+    "api.{search,channel_stats,trending,video_categories}"
 )
