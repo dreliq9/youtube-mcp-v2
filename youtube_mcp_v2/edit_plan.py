@@ -20,6 +20,15 @@ from .paths import EDIT_PLAN_DIR as _DEFAULT_EDIT_PLAN_DIR
 EDIT_PLAN_DIR = _DEFAULT_EDIT_PLAN_DIR
 PLAN_SCHEMA = "youtube-mcp.clip-plan/v1"
 _PLAN_RE = re.compile(r"^cp-[0-9a-f]{24}$")
+_IDENTITY_FIELDS = (
+    "schema",
+    "corpus_revision",
+    "query",
+    "transcript_index_revision",
+    "visual_index_revision",
+    "settings",
+    "clips",
+)
 
 
 class ClipPlanError(RuntimeError):
@@ -37,6 +46,24 @@ def _canonical_json(value: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _identity_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    return {field: plan.get(field) for field in _IDENTITY_FIELDS}
+
+
+def _revision_for_identity(identity: dict[str, Any]) -> str:
+    return "cp-" + hashlib.sha256(_canonical_json(identity)).hexdigest()[:24]
+
+
+def _verify_identity(plan: dict[str, Any], plan_revision: str) -> None:
+    if plan.get("schema") != PLAN_SCHEMA or plan.get("plan_revision") != plan_revision:
+        raise ClipPlanError(f"clip plan identity mismatch: {plan_revision}")
+    expected = _revision_for_identity(_identity_from_plan(plan))
+    if expected != plan_revision:
+        raise ClipPlanError(
+            f"clip plan content hash mismatch: expected {expected}, found {plan_revision}"
+        )
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -86,7 +113,6 @@ def _window_from_hit(
     end = max(evidence_end + context_after_s, start + min_clip_duration_s)
 
     if end - start > max_clip_duration_s:
-        # Center the bounded edit range around the retrieved evidence interval.
         center = (evidence_start + evidence_end) / 2.0
         start = max(0.0, center - max_clip_duration_s / 2.0)
         end = start + max_clip_duration_s
@@ -194,7 +220,7 @@ def build_plan(
         },
         "clips": selected,
     }
-    revision = "cp-" + hashlib.sha256(_canonical_json(identity)).hexdigest()[:24]
+    revision = _revision_for_identity(identity)
     return {
         **identity,
         "plan_revision": revision,
@@ -218,15 +244,18 @@ def plan_path(plan_revision: str) -> Path:
 def save_plan(plan: dict[str, Any]) -> Path:
     revision = str(plan.get("plan_revision") or "")
     path = plan_path(revision)
+    _verify_identity(plan, revision)
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(plan, indent=2, ensure_ascii=False)
     try:
         with path.open("x", encoding="utf-8") as file:
             file.write(encoded)
     except FileExistsError:
-        # Content-addressed identity means an existing revision is the same plan
-        # identity. Preserve the first artifact rather than rewriting history.
-        pass
+        existing = load_plan(revision)
+        if _canonical_json(existing) != _canonical_json(plan):
+            raise ClipPlanError(
+                f"existing clip-plan artifact differs for revision: {revision}"
+            )
     return path
 
 
@@ -238,6 +267,7 @@ def load_plan(plan_revision: str) -> dict[str, Any]:
         plan = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ClipPlanError(f"clip plan is unreadable: {plan_revision}") from exc
-    if plan.get("schema") != PLAN_SCHEMA or plan.get("plan_revision") != plan_revision:
-        raise ClipPlanError(f"clip plan identity mismatch: {plan_revision}")
+    if not isinstance(plan, dict):
+        raise ClipPlanError(f"clip plan root is not an object: {plan_revision}")
+    _verify_identity(plan, plan_revision)
     return plan
