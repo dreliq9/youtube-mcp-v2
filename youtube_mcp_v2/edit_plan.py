@@ -252,7 +252,9 @@ def save_plan(plan: dict[str, Any]) -> Path:
             file.write(encoded)
     except FileExistsError:
         existing = load_plan(revision)
-        if _canonical_json(existing) != _canonical_json(plan):
+        if _canonical_json(_identity_from_plan(existing)) != _canonical_json(
+            _identity_from_plan(plan)
+        ):
             raise ClipPlanError(
                 f"existing clip-plan artifact differs for revision: {revision}"
             )
