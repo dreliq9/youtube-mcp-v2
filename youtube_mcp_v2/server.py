@@ -32,6 +32,7 @@ from .tools.skeleton_tools import (
     skeleton_index as _skeleton_index,
 )
 from .tools.corpus import (
+    corpus_hydrate as _corpus_hydrate,
     corpus_prepare as _corpus_prepare,
     corpus_search as _corpus_search,
 )
@@ -194,8 +195,39 @@ def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — frozen-corpus evidence retrieval
+# Tier 1 — frozen-corpus acquisition and evidence retrieval
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="corpus.hydrate")
+def tool_corpus_hydrate(
+    handle: str,
+    lang: str = "en",
+    cursor: str | None = None,
+    batch_size: int = 8,
+    max_workers: int = 3,
+    policy: Literal["missing", "fresh"] = "missing",
+) -> dict[str, Any]:
+    """Populate transcript cache for one bounded/resumable corpus batch.
+
+    USE WHEN: a frozen corpus has many uncached transcripts and issuing one
+              transcript.get call per video would waste agent turns/context.
+    POLICY: 'missing' accepts any historical requested-language transcript;
+            'fresh' reacquires stale requested-language rows.
+    RESUME: pass next_cursor into the next call. Failures still advance the cursor;
+            restart at cursor='0' later to retry only unresolved members because
+            prior successes are then cache skips.
+    OUTPUT SHAPE: envelope wrapping progress counters plus compact per-attempt
+                  status/provenance. Transcript bodies are intentionally omitted.
+    """
+    return _corpus_hydrate(
+        handle,
+        lang=lang,
+        cursor=cursor,
+        batch_size=batch_size,
+        max_workers=max_workers,
+        policy=policy,
+    )
 
 
 @mcp.tool(name="corpus.prepare")
@@ -381,7 +413,7 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,expire,index}, corpus.{prepare,search}, "
+    "skeleton.{build,list,get,expire,index}, corpus.{hydrate,prepare,search}, "
     "frame.get, audio.get | tier-2: "
     "api.{search,channel_stats,trending,video_categories}"
 )

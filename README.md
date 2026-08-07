@@ -1,6 +1,6 @@
 # youtube-mcp-v2
 
-A disciplined YouTube MCP for evidence-grade video research. It exposes 16 tools across two tiers and is built around frozen research sets, validated transcripts, reproducible evidence retrieval, recoverable upstream failures, media extraction, and append-only local history.
+A disciplined YouTube MCP for evidence-grade video research. It exposes 17 tools across two tiers and is built around frozen research sets, validated transcripts, reproducible evidence retrieval, recoverable upstream failures, media extraction, and append-only local history.
 
 The long-term target is not "the most YouTube API wrappers." It is a reproducible multimodal research instrument: acquire video evidence reliably, preserve provenance, freeze corpora, and let an AI retrieve the exact spoken or visual moment that supports a claim.
 
@@ -8,6 +8,7 @@ The long-term target is not "the most YouTube API wrappers." It is a reproducibl
 
 - **Evidence before convenience** — tools report provenance and validation state rather than silently hiding fallbacks.
 - **Frozen research sets** — skeleton handles make multi-step research reproducible and diffable.
+- **Bounded orchestration** — corpus-scale acquisition uses resumable batches rather than hundreds of agent tool calls or one unbounded request.
 - **Pinned retrieval inputs** — corpus indexes record the exact transcript revisions and hashes they searched.
 - **Failure containment** — fragile scrapes and external binaries run behind hard timeouts and tool-boundary error envelopes.
 - **Never overwrite history** — transcript and metadata cache writes append new revisions.
@@ -22,7 +23,7 @@ The long-term target is not "the most YouTube API wrappers." It is a reproducibl
 
 The calling LLM picks tier explicitly. One documented exception: `skeleton.build(target='channel')` upgrades from tier-1 page scraping to tier-2 enumeration when an API key is present. The response envelope reports which source ran.
 
-## Tools (16)
+## Tools (17)
 
 **Pre-flight**
 - `inspect.video(url_or_id)` — id, title, duration, channel, caption languages, age-gate flag, embed flag, livestream flag
@@ -36,11 +37,26 @@ The calling LLM picks tier explicitly. One documented exception: `skeleton.build
 
 Existing skeleton handles are accepted directly as corpus revision identifiers. This is the compatibility bridge from the original skeleton vocabulary toward the broader `corpus.*` research model.
 
-**Corpus evidence retrieval**
+**Corpus acquisition + evidence retrieval**
+- `corpus.hydrate(handle, lang='en', cursor=None, batch_size=8, max_workers=3, policy='missing'|'fresh')` — scans frozen membership in stable order, skips transcript evidence already satisfying the selected cache policy, and acquires at most one bounded batch. Returns compact status/provenance only; transcript bodies remain in the cache. Use `next_cursor` to continue.
 - `corpus.prepare(handle, lang='en', chunk_tokens=500, chunk_overlap=50)` — builds or reuses an immutable, content-addressed search index from transcript revisions already in the append-only cache. It performs no live YouTube acquisition and reports any corpus videos that are not indexed.
 - `corpus.search(handle, query, top_k=10, lang='en', index_revision=None, validated_only=False, auto_prepare=True)` — returns only the most relevant timestamped evidence chunks instead of loading every transcript into model context.
 
-The first retrieval backend is a dependency-free BM25-style lexical index with technical-identifier-aware tokenization. Each index revision freezes the exact transcript row IDs and SHA-256 hashes used to build it. Supplying `index_revision` therefore pins the retrieval inputs even if newer transcript revisions are fetched later. Search hits include timestamp URLs, excerpts, lexical/semantic/hybrid score slots, transcript provenance and validation state, transcript revision/hash, and chunk hash. Dense semantic retrieval is designed to layer onto this same evidence contract rather than creating a second public search API. See `CORPUS_SEARCH.md`.
+The intended corpus workflow is:
+
+```text
+skeleton.build(...)
+      ↓
+corpus.hydrate(...)  # repeat with next_cursor
+      ↓
+corpus.prepare(...)
+      ↓
+corpus.search(...)
+```
+
+Hydration failures advance the cursor so one unavailable video cannot stall an entire corpus. Restarting later from cursor `0` retries unresolved members naturally because earlier successes are now cache skips. `policy='missing'` accepts any historical transcript revision; `policy='fresh'` refetches stale requested-language rows. See `CORPUS_HYDRATION.md`.
+
+The first retrieval backend is a dependency-free BM25-style lexical index with technical-identifier-aware tokenization. Each index revision freezes the exact transcript row IDs and SHA-256 hashes used to build it. Supplying `index_revision` therefore pins the retrieval inputs even if newer transcript revisions are fetched later. Search hits include timestamp URLs, excerpts, lexical/semantic/hybrid score slots, transcript provenance and validation state, transcript revision/hash, and chunk hash. See `CORPUS_SEARCH.md`.
 
 **Transcripts**
 - `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)`
@@ -83,15 +99,17 @@ On error, `data` is `null` and `error` is `{code, message, recoverable}`. Upstre
 
 The next major schema evolution is an **Evidence Envelope** that makes acquisition method, source revision, content hashes, transcript type, and timestamped evidence first-class. See `EVIDENCE_MODEL.md`.
 
+## Corpus-scale context efficiency
+
+`corpus.hydrate` and `corpus.search` are specifically designed to keep corpus size from turning into model-context size.
+
+Hydration returns status/provenance rather than transcript text. Retrieval returns only the leading timestamped evidence chunks. A calling model can therefore work over hundreds of cached videos without first ingesting hundreds of complete transcripts.
+
 ## Isolation
 
-`isolation.py` runs fragile Python scrape paths in a `ProcessPoolExecutor` with hard timeouts. yt-dlp and ffmpeg use bounded subprocess calls. Pure-Python HTTP/API paths rely on explicit library timeouts and tool-boundary exception handling.
+Fragile scrape/media paths are isolated or bounded at their provider boundary. yt-dlp and ffmpeg use bounded subprocess calls. Pure-Python HTTP/API paths rely on library/provider timeouts and tool-boundary exception handling.
 
-Current isolated paths include:
-- `scrape.search`
-- `skeleton.build(target='channel')` scrape path
-- `skeleton.build(target='topic')`
-- yt-dlp / ffmpeg media operations
+Hydration uses conservative thread concurrency (maximum four) to overlap bounded transcript provider I/O; it deliberately does not pretend that cancelling a running Python Future constitutes a hard network timeout.
 
 ## Cache and reproducibility
 
@@ -153,23 +171,21 @@ Live YouTube tests remain explicitly marked `network`/`slow` so CI does not conf
 
 The next sequence is intentionally acquisition-first:
 
-1. **v0.3 — Reliable acquisition:** provider abstraction, transcript fallback waterfall, proxy/cookie support, acquisition provenance, playlist/corpus ingestion.
-2. **v0.4 — Evidence search:** immutable lexical retrieval foundation, then local transcription fallback, replaceable embeddings, and hybrid semantic + exact-term search over frozen corpora.
+1. **v0.3 — Reliable acquisition:** provider abstraction, transcript fallback waterfall, proxy/cookie support, acquisition provenance, bounded corpus hydration, playlist/corpus ingestion.
+2. **v0.4 — Evidence search:** immutable lexical retrieval foundation, local transcription fallback, replaceable embeddings, and hybrid semantic + exact-term search over frozen corpora.
 3. **v0.5 — Multimodal temporal search:** scene detection, OCR, visual embeddings, and cross-modal spoken + on-screen evidence retrieval.
 4. **v0.6 — Distribution:** PyPI/uvx, Docker, official MCP Registry, and Streamable HTTP/remote-safe artifact delivery.
 5. **v0.7 — Research workflows:** a small number of strong compound retrieval tools rather than a 50-tool orchestration burden.
 
 See `ROADMAP.md` for acceptance criteria and `BENCHMARK.md` for the proposed public YouTube-MCP benchmark.
 
-## Design history
-
-`SPEC_r3.md` remains the canonical v0.2 design rationale. `SPEC.md` and `SPEC_r2.md` are preserved as design history rather than overwritten.
-
 ## Status
 
 **v0.2.1 stabilization:** MCP SDK v2 migration, packaging/CI hardening, transcript provenance, and stricter validation semantics.
 
-**v0.4 evidence-search foundation:** immutable content-addressed transcript indexes and bounded timestamped corpus retrieval are implemented on the development branch; dense semantic retrieval remains the next layer.
+**Corpus-scale acquisition:** resumable bounded hydration removes the need for one agent call per video while keeping transcript bodies out of orchestration responses.
+
+**v0.4 evidence-search foundation:** immutable content-addressed transcript indexes and bounded timestamped corpus retrieval are implemented on the development stack; optional dense semantic retrieval is developed in a separate stacked PR.
 
 Tier 3 (`oauth.*`, own-channel automation) remains reserved and is not a near-term product priority; creator automation is a different product axis from evidence-grade research.
 
