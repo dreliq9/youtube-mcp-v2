@@ -146,5 +146,5 @@ async def test_binary_resource_round_trip_through_in_memory_mcp_client(
     assert len(result.contents) == 1
     content = result.contents[0]
     assert isinstance(content, BlobResourceContents)
-    assert content.mimeType == "image/png"
+    assert content.mime_type == "image/png"
     assert base64.b64decode(content.blob) == payload
