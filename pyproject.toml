@@ -15,6 +15,9 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["google-api-python-client>=2.0"]
+# FastEmbed 0.8 keeps semantic retrieval local/portable through ONNX Runtime
+# without making model inference a core dependency for lexical-only installs.
+semantic = ["fastembed>=0.8,<0.9"]
 # Keep the legacy `frame` extra working while giving media extraction a name
 # that accurately covers both frame.get and audio.get.
 frame = ["yt-dlp>=2024.1"]

@@ -46,3 +46,22 @@ jobs:
         run: python -m pip install -e .
       - name: Import MCP server
         run: python -c "from mcp.server import MCPServer; from youtube_mcp_v2.server import mcp; assert isinstance(mcp, MCPServer)"
+
+  semantic-smoke:
+    name: Optional semantic package smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install semantic extra
+        run: python -m pip install -e ".[semantic]"
+      - name: Verify FastEmbed API without model download
+        run: >-
+          python -c "from fastembed import TextEmbedding;
+          from youtube_mcp_v2.embeddings import DEFAULT_MODEL_ID;
+          models = TextEmbedding.list_supported_models();
+          assert any(m.get('model') == DEFAULT_MODEL_ID for m in models);
+          print(DEFAULT_MODEL_ID)"

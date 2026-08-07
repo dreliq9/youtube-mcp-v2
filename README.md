@@ -8,7 +8,7 @@ The long-term target is not "the most YouTube API wrappers." It is a reproducibl
 
 - **Evidence before convenience** — tools report provenance and validation state rather than silently hiding fallbacks.
 - **Frozen research sets** — skeleton handles make multi-step research reproducible and diffable.
-- **Pinned retrieval inputs** — corpus indexes record the exact transcript revisions and hashes they searched.
+- **Pinned retrieval inputs** — corpus indexes record the exact transcript revisions, hashes, and retrieval model identity they searched.
 - **Failure containment** — fragile scrapes and external binaries run behind hard timeouts and tool-boundary error envelopes.
 - **Never overwrite history** — transcript and metadata cache writes append new revisions.
 - **Small public tool surface** — compound research capabilities should not require the calling model to orchestrate dozens of low-level wrappers.
@@ -37,10 +37,18 @@ The calling LLM picks tier explicitly. One documented exception: `skeleton.build
 Existing skeleton handles are accepted directly as corpus revision identifiers. This is the compatibility bridge from the original skeleton vocabulary toward the broader `corpus.*` research model.
 
 **Corpus evidence retrieval**
-- `corpus.prepare(handle, lang='en', chunk_tokens=500, chunk_overlap=50)` — builds or reuses an immutable, content-addressed search index from transcript revisions already in the append-only cache. It performs no live YouTube acquisition and reports any corpus videos that are not indexed.
-- `corpus.search(handle, query, top_k=10, lang='en', index_revision=None, validated_only=False, auto_prepare=True)` — returns only the most relevant timestamped evidence chunks instead of loading every transcript into model context.
+- `corpus.prepare(handle, lang='en', chunk_tokens=500, chunk_overlap=50, semantic='auto')` — builds or reuses an immutable, content-addressed search index from transcript revisions already in the append-only cache. It performs no live YouTube acquisition and reports any corpus videos that are not indexed.
+- `corpus.search(handle, query, top_k=10, lang='en', index_revision=None, validated_only=False, auto_prepare=True, semantic='auto')` — returns only the most relevant timestamped evidence chunks instead of loading every transcript into model context.
 
-The first retrieval backend is a dependency-free BM25-style lexical index with technical-identifier-aware tokenization. Each index revision freezes the exact transcript row IDs and SHA-256 hashes used to build it. Supplying `index_revision` therefore pins the retrieval inputs even if newer transcript revisions are fetched later. Search hits include timestamp URLs, excerpts, lexical/semantic/hybrid score slots, transcript provenance and validation state, transcript revision/hash, and chunk hash. Dense semantic retrieval is designed to layer onto this same evidence contract rather than creating a second public search API. See `CORPUS_SEARCH.md`.
+The lexical layer uses dependency-free BM25-style retrieval with technical-identifier-aware tokenization. The optional semantic layer adds dense FastEmbed vectors for those **same frozen chunks** and fuses lexical + semantic rankings with reciprocal rank fusion. Each index revision freezes the exact transcript row IDs/hashes plus retrieval model identity. A pinned `index_revision` therefore reproduces both the evidence inputs and the retrieval algorithm/model even after transcripts or model configuration change.
+
+Semantic policy is deliberately backend-neutral:
+
+- `semantic='off'` — lexical only.
+- `semantic='auto'` — use an already-local semantic model/index when available; never download a model, and fall back to lexical with a warning.
+- `semantic='required'` — require hybrid semantic retrieval and explicitly allow configured model initialization/download unless local-only mode is forced.
+
+Search hits include timestamp URLs, excerpts, lexical/semantic/hybrid scores and component ranks, transcript provenance and validation state, transcript revision/hash, chunk hash, corpus revision, and index revision. See `CORPUS_SEARCH.md`.
 
 **Transcripts**
 - `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)`
@@ -99,7 +107,9 @@ SQLite lives at `$XDG_CACHE_HOME/youtube-mcp/v2.sqlite` when `XDG_CACHE_HOME` is
 
 Skeletons live under the same cache root in `skeletons/`. Every build gets a timestamped handle. Old handles remain queryable so later corpus-diff and benchmark workflows can reproduce what the agent actually saw.
 
-Corpus search indexes live under `vectors/corpus/<handle>/`. They are immutable SQLite artifacts named by content-derived index revision and retain the transcript revision identities required to reproduce retrieval inputs.
+Corpus search indexes live under `vectors/corpus/<handle>/`. They are immutable SQLite artifacts named by content-derived index revision and retain the transcript revision identities required to reproduce retrieval inputs. Hybrid indexes contain normalized float32 vectors for their exact frozen chunks and identify the embedding model in metadata/index identity.
+
+Embedding model files use the same managed cache root under `models/fastembed/`.
 
 ## Install
 
@@ -112,12 +122,22 @@ pip install git+https://github.com/dreliq9/youtube-mcp-v2.git
 Optional extras:
 
 ```bash
-pip install "youtube-mcp-v2[api,media] @ git+https://github.com/dreliq9/youtube-mcp-v2.git"
+pip install "youtube-mcp-v2[api,media,semantic] @ git+https://github.com/dreliq9/youtube-mcp-v2.git"
 ```
 
 - `api` — `google-api-python-client` for `api.*`
 - `media` — `yt-dlp` for both `frame.get` and `audio.get`
+- `semantic` — FastEmbed/ONNX dense text embeddings for hybrid `corpus.search`
 - `frame` and `audio` remain compatibility aliases for the same yt-dlp dependency
+
+Semantic defaults:
+
+```text
+YOUTUBE_MCP_EMBED_MODEL=BAAI/bge-small-en-v1.5
+YOUTUBE_MCP_EMBED_LOCAL_ONLY=0
+```
+
+The model variable may be set to another FastEmbed-supported text model. Set `YOUTUBE_MCP_EMBED_LOCAL_ONLY=1` to prohibit model downloads even when `semantic='required'`.
 
 ## MCP compatibility
 
@@ -145,6 +165,7 @@ Without `YOUTUBE_API_KEY`, `api.*` tools still register and return `error.code =
 GitHub Actions runs:
 - non-network unit tests on Python 3.10, 3.11, 3.12, and 3.13
 - import/package smoke tests on Linux, macOS, and Windows
+- an optional semantic-extra/FastEmbed API smoke test without downloading model weights
 - bytecode compilation before the unit suite
 
 Live YouTube tests remain explicitly marked `network`/`slow` so CI does not confuse upstream throttling with a deterministic code regression.
@@ -154,7 +175,7 @@ Live YouTube tests remain explicitly marked `network`/`slow` so CI does not conf
 The next sequence is intentionally acquisition-first:
 
 1. **v0.3 — Reliable acquisition:** provider abstraction, transcript fallback waterfall, proxy/cookie support, acquisition provenance, playlist/corpus ingestion.
-2. **v0.4 — Evidence search:** immutable lexical retrieval foundation, then local transcription fallback, replaceable embeddings, and hybrid semantic + exact-term search over frozen corpora.
+2. **v0.4 — Evidence search:** immutable lexical + hybrid semantic retrieval over frozen corpora, followed by local transcription fallback and benchmark-driven vector-index scaling.
 3. **v0.5 — Multimodal temporal search:** scene detection, OCR, visual embeddings, and cross-modal spoken + on-screen evidence retrieval.
 4. **v0.6 — Distribution:** PyPI/uvx, Docker, official MCP Registry, and Streamable HTTP/remote-safe artifact delivery.
 5. **v0.7 — Research workflows:** a small number of strong compound retrieval tools rather than a 50-tool orchestration burden.
@@ -169,7 +190,7 @@ See `ROADMAP.md` for acceptance criteria and `BENCHMARK.md` for the proposed pub
 
 **v0.2.1 stabilization:** MCP SDK v2 migration, packaging/CI hardening, transcript provenance, and stricter validation semantics.
 
-**v0.4 evidence-search foundation:** immutable content-addressed transcript indexes and bounded timestamped corpus retrieval are implemented on the development branch; dense semantic retrieval remains the next layer.
+**v0.4 evidence search:** immutable content-addressed transcript indexes, bounded timestamped lexical retrieval, optional dense semantic vectors, and lexical+dense RRF fusion are implemented on the development stack. Exact vector scan is the current semantic baseline; benchmark-driven ANN is a later internal optimization.
 
 Tier 3 (`oauth.*`, own-channel automation) remains reserved and is not a near-term product priority; creator automation is a different product axis from evidence-grade research.
 
