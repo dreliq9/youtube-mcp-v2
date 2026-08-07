@@ -1,8 +1,9 @@
 """Skeleton handles — frozen reference objects for multi-step research.
 
-A skeleton is a snapshot of the videos for a channel or topic at a point in time.
-Once built, it is read-only. Re-building creates a new handle. Old handles remain
-queryable forever (CAiD revision discipline).
+A skeleton is a read-only snapshot of a research set at a point in time. It may
+come from one channel, one topic search, or an explicitly composed heterogeneous
+collection. Re-building or re-composing creates a new handle; old handles remain
+queryable forever (revision discipline).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ MODEL_DIR = _DEFAULT_MODEL_DIR
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _HANDLE_RE = re.compile(
-    r"^(chan|topic)-[A-Za-z0-9_.@-]+-\d{8}-\d{6}(?:-\d{6})?$"
+    r"^(chan|topic|set)-[A-Za-z0-9_.@-]+-\d{8}-\d{6}(?:-\d{6})?$"
 )
 
 
@@ -50,10 +51,20 @@ def _slug(value: str, max_len: int = 40) -> str:
     return slug[:max_len] or "unknown"
 
 
-def make_handle(target: Literal["channel", "topic"], value: str) -> str:
-    prefix = "chan" if target == "channel" else "topic"
-    base = value.strip()
-    body = base if target == "channel" else _slug(base)
+def make_handle(
+    target: Literal["channel", "topic", "collection"], value: str
+) -> str:
+    if target == "channel":
+        prefix = "chan"
+        body = value.strip()
+    elif target == "topic":
+        prefix = "topic"
+        body = _slug(value.strip())
+    elif target == "collection":
+        prefix = "set"
+        body = _slug(value.strip())
+    else:  # defensive guard for non-typed callers
+        raise ValueError(f"unsupported skeleton target: {target!r}")
     return f"{prefix}-{body}-{_now_handle_stamp()}"
 
 

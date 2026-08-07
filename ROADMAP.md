@@ -1,154 +1,102 @@
-# Roadmap — from YouTube MCP to evidence-grade video intelligence
+# Roadmap — evidence-grade access to knowledge encoded in video
 
 ## North star
 
-youtube-mcp-v2 should be the most trustworthy MCP for **researching what a video corpus actually contains**.
+youtube-mcp-v2 should be the most trustworthy MCP for **researching what video sources actually contain**, regardless of subject matter.
 
-The product should not optimize for raw tool count. It should optimize for agent task success on questions such as:
+Engineering, cooking, history, religion, sports, products, science, politics, games, philosophy, creative work, and practical tutorials are all workloads—not product identities.
 
-> Across this channel, find every place the creator discusses sodium-ion batteries, distinguish spoken claims from values shown on screen, and give me auditable timestamps.
+The product should optimize for agent task success on questions such as:
 
-That requires five capabilities working together:
+> Across this deliberately mixed set of sources, find the strongest evidence for competing explanations of the same idea, distinguish what was said from what was shown, and give me auditable timestamps.
+
+That requires six capabilities working together:
 
 1. reliable acquisition,
-2. frozen/reproducible corpora,
-3. semantic + temporal retrieval,
+2. frozen and composable research corpora,
+3. semantic + exact-string + temporal retrieval,
 4. multimodal evidence,
-5. explicit provenance and validation.
+5. explicit provenance and validation,
+6. domain-diverse benchmark evidence that the system generalizes.
+
+See `PRODUCT_THESIS.md` for the product framing.
 
 ## Architectural invariants
 
-These remain true across every milestone:
-
-- **No silent provider fallback.** A fallback may be automatic, but its acquisition path is recorded.
-- **No silent validation downgrade.** If a required integrity check cannot run, `validated` cannot imply that it did.
+- **Domain-neutral primitives.** Core behavior must not assume the subject being researched.
+- **No silent provider fallback.** Automatic fallback is allowed only with visible acquisition provenance.
+- **No silent validation downgrade.** `validated` must not imply a check ran when it could not.
 - **No destructive cache updates.** New observations append revisions.
-- **Frozen corpus revisions are immutable.** Enrichment lives alongside a revision; it does not mutate what was originally captured.
-- **The public MCP surface stays small.** Internal primitives can grow freely; public tools should map to useful agent jobs.
-- **Local-first remains first class.** A hosted deployment is an additional transport, not a reason to sacrifice local media/ML workflows.
-- **Evidence is addressable.** Research results should resolve to a video plus time range, source method, and supporting text/frame artifact.
+- **Frozen corpus revisions are immutable.** Enrichment and later composition do not rewrite old membership.
+- **Research universes are composable.** Cross-domain work must not require pretending a curated set is one topic search.
+- **The public MCP surface stays small.** Internal primitives can grow; public tools map to useful agent jobs.
+- **Local-first remains first class.** Hosted transport must not sacrifice local media/ML workflows.
+- **Evidence is addressable.** Results resolve to video + time + source method + supporting text/frame artifact.
+- **Exact strings remain first-class evidence.** Names, dates, quotations, citations, quantities, prices, identifiers, scores, notation, UI labels, and codes must survive semantic retrieval.
 
 ---
 
 ## v0.2.1 — Protocol & provenance hardening
 
-Goal: make the existing v0.2 feature set safe to build on.
+Goal: make the original feature set safe to build on.
 
-### Scope
+Scope includes MCP Python SDK v2 migration, dependency/package correctness, cross-platform CI, requested-vs-actual transcript language, generated-caption provenance, stricter validation, explicit caller errors, and current API quota documentation.
 
-- MCP Python SDK v2 migration.
-- Explicit dependency bounds and `python-dotenv` declaration.
-- Media extras that correctly cover both frames and audio.
-- Cross-version/cross-platform CI.
-- Requested-vs-actual transcript language preservation.
-- Generated-caption provenance when available.
-- No `validated=True` when the duration-dependent word-rate gate could not run.
-- Explicit errors for invalid transcript modes/chunk budgets.
-- Correct current `search.list` quota documentation.
-
-### Exit criteria
-
-- All deterministic tests green on Python 3.10–3.13.
-- Import/package smoke green on Linux, macOS, Windows.
-- Existing cache migrates additively.
-- Existing MCP clients can launch the stdio server through SDK v2 compatibility negotiation.
+Exit criteria: deterministic Python 3.10–3.13 tests; Linux/macOS/Windows package/import smoke; additive cache migration; stdio client compatibility.
 
 ---
 
 ## v0.3 — Reliable acquisition + corpus foundation
 
-Goal: make upstream failure boring and make research sets first-class.
+Goal: make upstream failure boring and make research source selection first-class.
 
-### 1. Provider abstraction
+### Provider abstraction
 
-Introduce internal interfaces rather than embedding fallback policy directly into tools.
+Public transcript requests should not need to select a fragile provider. The acquisition layer records provider/method/outcome history and can fall through captions, alternate caption extraction, authenticated paths, and local STT.
 
-Suggested shape:
+### Network policy
 
-```python
-@dataclass(frozen=True)
-class AcquisitionAttempt:
-    provider: str
-    method: str
-    started_at: str
-    duration_ms: int
-    outcome: Literal["success", "unavailable", "blocked", "timeout", "error"]
-    detail: str | None = None
+Support explicit proxy/cookie/timeout/offline policy without leaking credentials.
 
-@dataclass(frozen=True)
-class TranscriptArtifact:
-    video_id: str
-    requested_lang: str
-    actual_lang: str
-    transcript_type: Literal["manual", "generated", "local_stt", "unknown"]
-    segments: list[Segment]
-    attempts: list[AcquisitionAttempt]
-```
+### Corpus model
 
-Initial transcript waterfall:
+Historical `skeleton.*` handles remain readable, but the broader model is a frozen **corpus revision**.
 
-1. fresh validated cache,
-2. native caption acquisition,
-3. alternate yt-dlp/InnerTube caption path,
-4. optional cookie-authenticated acquisition,
-5. optional local STT fallback (implemented fully in v0.4, interface reserved now).
-
-The public tool returns one result; the provenance tells the caller how it was obtained.
-
-### 2. Network policy
-
-Add configuration rather than hard-coded network behavior:
-
-- HTTP proxy / SOCKS proxy URI.
-- yt-dlp proxy propagation.
-- optional YouTube cookie file / browser-cookie import path.
-- request timeout and retry budget.
-- explicit no-proxy/offline mode.
-- per-provider circuit breaker after repeated blocking/rate-limit failures.
-
-Secrets and cookies must never be returned in tool results or logs.
-
-### 3. Corpus model
-
-Evolve the internal skeleton primitive without discarding it. Public naming can become `corpus.*`; historical skeleton handles remain readable.
-
-Minimum corpus targets:
+Minimum corpus origins:
 
 - channel,
 - playlist,
 - topic/search snapshot,
-- explicit video-id/url set.
+- explicit video IDs/URLs,
+- heterogeneous composition of multiple existing corpora.
 
-Suggested public surface:
+### Heterogeneous composition
 
-- `corpus.build(target, value, limit, ...)`
-- `corpus.get(handle)`
-- `corpus.list(handle, cursor=...)`
-- `corpus.diff(base_handle, head_handle)`
-- `corpus.index(target=None)`
+`corpus.compose` is the domain-neutral source-selection primitive.
 
-`corpus.diff` should report additions, removals, metadata changes, and content/provenance changes separately.
+It should:
 
-### 4. Acquisition manifest
+- create a `collection` revision from direct videos,
+- union multiple frozen channel/topic/collection handles,
+- derive a new revision from an existing collection,
+- apply explicit removals without mutating parents,
+- dedupe membership deterministically,
+- preserve source/composition provenance,
+- perform no live network acquisition.
 
-Every frozen corpus gets a machine-readable manifest containing:
+This makes queries such as "compare how four unrelated disciplines treat the same concept" structurally natural.
 
-- schema version,
-- corpus handle/revision,
-- query/channel/playlist identity,
-- capture timestamp,
-- video IDs and canonical URLs,
-- metadata revision IDs/hashes,
-- acquisition providers attempted,
-- tool/server version.
+### Acquisition manifest
+
+Every frozen corpus records schema/revision, origin/composition provenance, capture time, canonical video IDs/URLs, and server/tool version where possible.
 
 ### v0.3 exit criteria
 
-- A channel or playlist can be captured and later diffed without reinterpreting the original revision.
-- Proxy/cookie configuration is supported without leaking secrets.
-- Provider failure produces a structured attempt history rather than a generic opaque exception.
-- A blocked primary transcript path can succeed through an alternate acquisition path and the fallback is visible in provenance.
-- Network tests include mocked 429, timeout, malformed-page, disabled-caption, and fallback-success cases.
+- channel/topic/explicit/mixed corpora can be frozen without reinterpretation,
+- a heterogeneous corpus can be derived immutably from earlier revisions,
+- provider failure returns structured attempt history,
+- proxy/cookie paths do not leak secrets,
+- mocked fault coverage includes fallback success.
 
 ---
 
@@ -156,67 +104,26 @@ Every frozen corpus gets a machine-readable manifest containing:
 
 Goal: turn frozen corpora into timestamp-searchable knowledge bases.
 
-### 1. Local transcription fallback
+### Local transcription fallback
 
-Public capability:
+Use adapter backends (e.g. whisper.cpp portable, MLX-optimized optional path) and store model/audio identity in provenance.
 
-- `transcript.get(..., acquisition="auto"|"captions"|"local_stt")`
+### Transcript indexing
 
-Backends should be adapters so Apple Silicon, portable CPU, and future accelerator paths are swappable.
+Preserve corpus handle, video ID, timestamp span, transcript revision/hash, text, validation, and retrieval model identity.
 
-Initial candidates:
+### Hybrid retrieval
 
-- `mlx-whisper` on Apple Silicon,
-- `whisper.cpp` portable fallback.
+Combine semantic ranking with lexical/exact signals.
 
-Store model identifier, model revision/hash, decode settings, source-audio hash, and timing resolution in provenance.
-
-### 2. Transcript indexing
-
-Chunk by **semantic/timestamp boundaries**, not arbitrary fixed characters alone.
-
-Index row should preserve:
-
-- corpus handle,
-- video ID,
-- start/end seconds,
-- transcript revision ID,
-- chunk text,
-- embedding model/revision,
-- vector,
-- validation state.
-
-Avoid making FAISS file format part of the public contract. The index backend is replaceable.
-
-### 3. Evidence retrieval
-
-Suggested public tool:
-
-```text
-corpus.search(handle, query, top_k=10, filters=None)
-```
-
-Each hit returns:
-
-- canonical video identity,
-- start/end timestamp,
-- supporting excerpt,
-- similarity/retrieval score,
-- transcript acquisition method,
-- validation state,
-- corpus revision,
-- direct timestamp URL.
-
-### 4. Hybrid retrieval
-
-Combine vector retrieval with lexical signals for exact names, part numbers, quoted phrases, and numbers. Pure vector search is not enough for engineering/product research.
+Exact-string benchmark categories must come from multiple domains, including names/dates/quotes, legal/document identifiers, quantities/prices, citations, scientific notation, product/model identifiers, scores, UI/game labels, and codes.
 
 ### v0.4 exit criteria
 
-- Search a corpus containing at least 100 hours of transcript data without loading it all into model context.
-- Retrieval results are reproducible against a frozen corpus revision.
-- Benchmark recall@10 and timestamp precision targets are defined in `BENCHMARK.md` and met on the reference set.
-- Missing native captions can be indexed through local STT without changing the public search workflow.
+- at least 100 hours searchable without loading the corpus into model context,
+- old index revisions remain reproducible,
+- benchmark Recall@k/timestamp targets are met across multiple domain strata,
+- missing captions can enter the same search workflow through local STT.
 
 ---
 
@@ -226,48 +133,40 @@ Goal: retrieve what was **shown**, not only what was said.
 
 ### Pipeline
 
-1. scene/change-point detection,
-2. representative keyframe selection,
-3. OCR,
-4. visual description/embedding,
-5. temporal alignment with transcript segments,
-6. cross-modal retrieval and evidence fusion.
+1. bounded/adaptive frame hydration,
+2. scene/change-point detection,
+3. representative keyframe selection,
+4. OCR/on-screen text extraction,
+5. visual embedding/description,
+6. temporal alignment with transcript segments,
+7. cross-modal retrieval and evidence fusion.
 
-### Internal primitives
+### Domain-neutral visual targets
 
-- scene detection,
-- keyframe extraction,
-- OCR,
-- image embedding,
-- optional frame description,
-- image-to-image similarity.
+Visual retrieval must handle more than charts/technical diagrams. Benchmarks should include:
 
-These do not all need to be public MCP tools.
+- historical maps and archival imagery,
+- lecture slides/quotations,
+- cooking consistency/technique demonstrations,
+- products and physical failure demonstrations,
+- artwork/film/game imagery,
+- sports/game state,
+- UI/screens,
+- diagrams/scientific visuals,
+- practical how-to steps,
+- text rendered only into pixels.
 
-### Suggested public capability
+### OCR target
 
-```text
-corpus.search(handle, query, modalities=["speech", "screen"], top_k=10)
-```
-
-A result can contain multiple aligned evidence items:
-
-- transcript excerpt,
-- OCR text,
-- frame/resource URI,
-- exact timestamp/time range,
-- modality-specific confidence.
-
-### Important target query
-
-> Find the chart where the reviewer shows transient power above rated TGP and return both the spoken interpretation and the chart frame.
+OCR evidence should retain frozen frame SHA/timestamp, exact text, confidence/bbox, and OCR engine identity. Exact on-screen strings remain searchable without pretending OCR is a semantic-only problem.
 
 ### v0.5 exit criteria
 
-- OCR retrieval finds text present only on screen.
-- visual/temporal retrieval finds a target scene even when the transcript never names it exactly.
-- returned media is consumable through MCP content/resources, not only host-local filesystem paths.
-- cross-modal results retain separate provenance for speech and visual evidence.
+- on-screen-only text can be retrieved,
+- visual retrieval finds target scenes not named in speech,
+- returned media is consumable through MCP resources,
+- cross-modal results retain separate speech/visual/OCR provenance,
+- domain-diverse benchmark tasks show no single-field dependency.
 
 ---
 
@@ -275,77 +174,59 @@ A result can contain multiple aligned evidence items:
 
 Goal: remove installation friction without weakening local-first capabilities.
 
-### Distribution
-
-- publish to PyPI,
-- `uvx youtube-mcp-v2` launch path,
-- Docker image,
+- PyPI/uvx,
+- Docker,
 - official MCP Registry metadata,
-- signed/versioned release artifacts,
-- semantic release notes and migration notes.
-
-### Remote transport
-
-Add Streamable HTTP deployment with:
-
-- stateless modern MCP operation,
-- authentication boundary,
-- rate limits,
-- bounded media/artifact responses,
-- resource URIs instead of server-local paths,
-- storage quotas and cache health diagnostics.
-
-### Install/doctor UX
-
-Add CLI commands such as:
-
-- `youtube-mcp-v2 doctor`
-- `youtube-mcp-v2 config check`
-- `youtube-mcp-v2 cache status`
-
-Doctor should verify Python package versions, ffmpeg/yt-dlp availability, writable cache paths, API key presence (without printing it), and configured model backends.
+- signed/versioned releases,
+- Streamable HTTP with authentication/rate/resource bounds,
+- protocol-native media resources,
+- storage/cache health diagnostics,
+- doctor/config checks for optional ML/media backends.
 
 ---
 
 ## v0.7 — Compound research workflows
 
-Goal: make complex research one good MCP call rather than eight fragile agent-orchestration steps.
+Goal: make complex evidence retrieval one good call rather than fragile model-side orchestration.
 
-Candidate public tools:
+Candidate jobs:
 
-- `research.retrieve(question, corpus=..., modalities=...)`
-- `research.compare(corpus, entities, dimensions=...)`
+- retrieve evidence for one research question across selected modalities,
+- compare sources/entities/claims across explicit dimensions,
+- trace position/claim changes across time,
+- surface agreement/disagreement while preserving the underlying evidence set.
 
-These tools should **retrieve and structure evidence**, not become an embedded general-purpose LLM. The calling model remains responsible for synthesis and judgment.
+These tools retrieve and structure evidence; the calling model remains responsible for synthesis and judgment.
 
-A compound result should include the exact evidence set needed to support or challenge the model's answer.
+Cross-domain compound tasks are mandatory benchmarks here, not edge cases.
 
 ---
 
-## Target public MCP surface
+## Target public surface
 
-The internal package can contain many adapters and primitives. The mature public surface should remain approximately 8–15 high-value tools:
+The mature surface should remain a compact set around:
 
 - discovery/search,
-- video inspect,
-- transcript retrieval,
-- media/evidence retrieval,
-- corpus build/get/list/diff/search,
-- health/doctor where appropriate,
-- one or two compound research retrieval operations.
+- inspect/transcript/media,
+- corpus build/compose/get/list/diff,
+- corpus hydration/index/search,
+- one or two compound evidence retrieval jobs,
+- health/doctor where appropriate.
+
+`corpus.compose` earns a public tool because heterogeneous source selection is a distinct agent job. Internal embedding/OCR/scene primitives do not automatically earn public tools.
 
 Tool-count growth is not a success metric.
 
----
-
 ## Explicit non-goals
 
-- Becoming a full YouTube Studio/channel-management automation suite.
-- Reimplementing yt-dlp as a downloader.
-- Hiding third-party model/API costs behind opaque behavior.
-- Returning generated summaries without the underlying evidence.
-- Making one vector database or one ML model a permanent public dependency.
+- Becoming a YouTube Studio/channel-management suite.
+- Reimplementing yt-dlp.
+- Becoming an engineering-specific research product.
+- Encoding one discipline's ontology into the core evidence model.
+- Hiding model/API costs behind opaque behavior.
+- Returning generated summaries without source evidence.
+- Making one vector DB or ML model a permanent public dependency.
 
 ## Definition of "best"
 
-The project should only claim market leadership when the public benchmark demonstrates it. See `BENCHMARK.md`.
+Market leadership requires the public benchmark to demonstrate task success, retrieval quality, provenance, efficiency, and resilience **across domains and media conditions**. See `BENCHMARK.md`.
