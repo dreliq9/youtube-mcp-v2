@@ -16,8 +16,6 @@ from typing import Any, Literal
 from dotenv import load_dotenv
 from mcp.server import MCPServer
 
-# Load .env from the project root (the dir containing pyproject.toml).
-# override=False so an explicit env var from the client config wins.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
@@ -32,6 +30,7 @@ from .tools.skeleton_tools import (
     skeleton_index as _skeleton_index,
 )
 from .tools.corpus import (
+    corpus_hydrate as _corpus_hydrate,
     corpus_prepare as _corpus_prepare,
     corpus_search as _corpus_search,
 )
@@ -50,28 +49,14 @@ logging.basicConfig(level=logging.INFO)
 mcp = MCPServer("YouTube v0.2.1")
 
 
-# ---------------------------------------------------------------------------
-# Tier 1 — pre-flight
-# ---------------------------------------------------------------------------
-
-
 @mcp.tool(name="inspect.video")
 def tool_inspect_video(url_or_id: str) -> dict[str, Any]:
     """Pre-flight check on a YouTube video.
 
-    USE WHEN: you have a URL/id and need capabilities (transcript? language?
-    duration? age-gated?) before deciding which heavy tool to call next.
-    DO NOT USE WHEN: you've already inspected this id this session.
-    OUTPUT SHAPE: envelope wrapping { id, title, channel, duration_s, view_count,
-                  publish_date, lang_default, available_caption_langs[],
-                  has_transcript, age_gated, embed_allowed, livestream }.
+    USE WHEN: you have a URL/id and need capabilities before deciding which heavy
+    tool to call next.
     """
     return _inspect_video(url_or_id)
-
-
-# ---------------------------------------------------------------------------
-# Tier 1 — transcripts
-# ---------------------------------------------------------------------------
 
 
 @mcp.tool(name="transcript.get")
@@ -83,17 +68,7 @@ def tool_transcript_get(
     chunk_tokens: int = 500,
     chunk_overlap: int = 50,
 ) -> dict[str, Any]:
-    """Fetch a YouTube transcript in one of three shapes.
-
-    USE WHEN mode='text': consumer just needs the words, no timing.
-    USE WHEN mode='timed': consumer needs timestamps (jump to a moment, cut clips).
-    USE WHEN mode='chunked': long transcript that won't fit a single LLM call.
-    DO NOT USE: when you don't yet have a video id — call inspect.video first.
-    OUTPUT SHAPE: depends on mode. text → {text, word_count}; timed → {segments,
-                  next_cursor}; chunked → {chunks: [{i, n, start_s, end_s, text,
-                  token_estimate}]}. All modes include requested_lang, actual lang,
-                  and whether the caption track was generated when known.
-    """
+    """Fetch a YouTube transcript as flat text, timed segments, or chunks."""
     return _transcript_get(
         url_or_id,
         mode=mode,
@@ -104,27 +79,10 @@ def tool_transcript_get(
     )
 
 
-# ---------------------------------------------------------------------------
-# Tier 1 — search (no key)
-# ---------------------------------------------------------------------------
-
-
 @mcp.tool(name="scrape.search")
 def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
-    """Search YouTube via page scraping. No API key needed.
-
-    USE WHEN: discovering videos by topic without a YOUTUBE_API_KEY.
-    DO NOT USE WHEN: YOUTUBE_API_KEY is set — call api.search instead for richer
-                     fields (channel ids, dates, no rate-limit quirks).
-    OUTPUT SHAPE: envelope wrapping list of {id, title, channel, channel_id,
-                  duration, views, published, url}.
-    """
+    """Search YouTube via page scraping when no Data API key is available."""
     return _scrape_search(query, n)
-
-
-# ---------------------------------------------------------------------------
-# Tier 1 — skeletons (frozen reference objects)
-# ---------------------------------------------------------------------------
 
 
 @mcp.tool(name="skeleton.build")
@@ -133,69 +91,69 @@ def tool_skeleton_build(
     value: str,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Build a frozen reference of videos for a channel or topic.
-
-    USE WHEN target='channel': stable list of a creator's recent uploads to fan
-                               downstream calls (transcripts, frames) against.
-    USE WHEN target='topic':   frozen snapshot of search results for later
-                               comparison or semantic search.
-    DO NOT USE WHEN: you only need a one-shot search — call scrape.search.
-    OUTPUT SHAPE: envelope wrapping {handle, target, value, source, count}.
-                  Use skeleton.get / skeleton.list to read the contents.
-    """
+    """Build a frozen reference of videos for a channel or topic."""
     return _skeleton_build(target, value, limit)
 
 
 @mcp.tool(name="skeleton.list")
 def tool_skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
-    """List the videos in a skeleton.
-
-    USE WHEN: iterating videos for downstream batch ops.
-    DO NOT USE WHEN: you need build provenance/channel meta — use skeleton.get.
-    OUTPUT SHAPE: envelope wrapping list of video entries; nullable fields
-                  enriched from cache when enrich=True.
-    """
+    """List videos in a frozen skeleton/corpus revision."""
     return _skeleton_list(handle, enrich=enrich)
 
 
 @mcp.tool(name="skeleton.get")
 def tool_skeleton_get(handle: str) -> dict[str, Any]:
-    """Load the full skeleton snapshot.
-
-    USE WHEN: you need build_at / source / channel meta or the raw frozen list.
-    DO NOT USE WHEN: you only need the videos — use skeleton.list.
-    OUTPUT SHAPE: envelope wrapping the full skeleton dict.
-    """
+    """Load the full frozen skeleton snapshot and provenance."""
     return _skeleton_get(handle)
 
 
 @mcp.tool(name="skeleton.expire")
 def tool_skeleton_expire(handle: str) -> dict[str, Any]:
-    """Mark a skeleton stale. Does NOT delete (revision discipline).
-
-    USE WHEN: signalling that downstream consumers should rebuild while
-              preserving the old snapshot for diff/audit.
-    DO NOT USE WHEN: you want to discard data — build a new handle and ignore
-                     the old one instead.
-    OUTPUT SHAPE: envelope wrapping {handle, expired_at}.
-    """
+    """Mark a skeleton stale without deleting its frozen membership."""
     return _skeleton_expire(handle)
 
 
 @mcp.tool(name="skeleton.index")
 def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
-    """List all skeletons on disk (summary view).
-
-    USE WHEN: discovering existing skeletons before building a new one.
-    DO NOT USE WHEN: you already know the handle.
-    OUTPUT SHAPE: envelope wrapping list of skeleton summaries.
-    """
+    """Discover existing frozen skeletons on disk."""
     return _skeleton_index(target)
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — frozen-corpus evidence retrieval
+# Tier 1 — frozen-corpus acquisition and evidence retrieval
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="corpus.hydrate")
+def tool_corpus_hydrate(
+    handle: str,
+    lang: str = "en",
+    cursor: str | None = None,
+    batch_size: int = 8,
+    max_workers: int = 3,
+    policy: Literal["missing", "fresh"] = "missing",
+) -> dict[str, Any]:
+    """Populate cached transcripts for one bounded/resumable corpus batch.
+
+    USE WHEN: a frozen corpus contains many videos whose transcripts have not yet
+              been cached. This replaces one transcript.get call per video with a
+              bounded batch operation.
+    POLICY: 'missing' preserves any historical cached transcript revision; 'fresh'
+            refetches members whose newest requested-language transcript is stale.
+    RESUME: pass next_cursor into the next call. Failed acquisitions still advance
+            the cursor; restart from cursor='0' later to retry only unresolved
+            members because prior successes are cache skips.
+    OUTPUT: compact per-attempt status/provenance only — transcript bodies are
+            deliberately not returned into model context.
+    """
+    return _corpus_hydrate(
+        handle,
+        lang=lang,
+        cursor=cursor,
+        batch_size=batch_size,
+        max_workers=max_workers,
+        policy=policy,
+    )
 
 
 @mcp.tool(name="corpus.prepare")
@@ -205,15 +163,7 @@ def tool_corpus_prepare(
     chunk_tokens: int = 500,
     chunk_overlap: int = 50,
 ) -> dict[str, Any]:
-    """Prepare an immutable local evidence index for a frozen skeleton/corpus.
-
-    USE WHEN: you expect to ask multiple questions across a frozen video set and
-              want retrieval without loading every transcript into model context.
-    DOES NOT: fetch missing transcripts from YouTube. It indexes exact transcript
-              revisions already present in the append-only cache and reports gaps.
-    OUTPUT SHAPE: envelope wrapping corpus/index revision IDs, transcript coverage,
-                  missing video IDs, chunk count, and backend/model identity.
-    """
+    """Prepare an immutable local evidence index from cached corpus transcripts."""
     return _corpus_prepare(
         handle,
         lang=lang,
@@ -232,18 +182,7 @@ def tool_corpus_search(
     validated_only: bool = False,
     auto_prepare: bool = True,
 ) -> dict[str, Any]:
-    """Retrieve timestamped evidence across a frozen corpus revision.
-
-    USE WHEN: the answer may live anywhere across many already-cached video
-              transcripts. Returns only top evidence chunks, not full transcripts.
-    REPRODUCIBILITY: pass an explicit index_revision to pin the exact transcript
-                     row IDs/hashes that were searched. Omitting it uses the newest
-                     prepared index for the requested language.
-    OUTPUT SHAPE: envelope wrapping {corpus_revision, index_revision, query,
-                  coverage, hits[]}. Each hit includes timestamp URL/excerpt,
-                  retrieval scores, transcript revision/hash/language/generated
-                  status/validation, and chunk hash.
-    """
+    """Retrieve a bounded set of timestamped evidence across a frozen corpus."""
     return _corpus_search(
         handle,
         query,
@@ -253,11 +192,6 @@ def tool_corpus_search(
         validated_only=validated_only,
         auto_prepare=auto_prepare,
     )
-
-
-# ---------------------------------------------------------------------------
-# Tier 1 — frame/audio extraction (yt-dlp + ffmpeg)
-# ---------------------------------------------------------------------------
 
 
 @mcp.tool(name="frame.get")
@@ -270,20 +204,7 @@ def tool_frame_get(
     size: str = "1280x720",
     fmt: Literal["png", "jpg"] = "png",
 ) -> dict[str, Any]:
-    """Extract one frame or a contact sheet from a YouTube video.
-
-    USE WHEN mode='single': you need a specific moment as an image (timestamp_s
-                            required). For in-text references, captions, or
-                            feeding to a vision model.
-    USE WHEN mode='sheet':  at-a-glance view of a video (LitRPG review,
-                            scene-skimming, content audit). Returns the tiled
-                            sheet AND the individual frames.
-    DO NOT USE WHEN: you only need text — call transcript.get instead.
-                     For a full video download, this is not the right tool.
-    OUTPUT SHAPE: envelope wrapping
-                  single → {path, timestamp_s, cached}
-                  sheet  → {path, layout, frame_timestamps, frame_paths, cached}.
-    """
+    """Extract one frame or a contact sheet from a YouTube video."""
     return _frame_get(
         url_or_id, mode=mode, timestamp_s=timestamp_s,
         n=n, layout=layout, size=size, fmt=fmt,
@@ -298,14 +219,7 @@ def tool_audio_get(
     start_s: float | None = None,
     end_s: float | None = None,
 ) -> dict[str, Any]:
-    """Extract YouTube audio to a local file for downstream transcription.
-
-    USE WHEN: another tool needs a local audio path, especially local speech or
-              music-analysis tooling. Defaults to mono 22.05 kHz WAV.
-    DO NOT USE WHEN: you only need words — call transcript.get instead.
-    OUTPUT SHAPE: envelope wrapping {id, path, format, sample_rate, mono,
-                  start_s, end_s, cached}.
-    """
+    """Extract cached mono audio for downstream speech/audio analysis."""
     return _audio_get(
         url_or_id,
         fmt=fmt,
@@ -313,11 +227,6 @@ def tool_audio_get(
         start_s=start_s,
         end_s=end_s,
     )
-
-
-# ---------------------------------------------------------------------------
-# Tier 2 — Data API v3 (BYO YOUTUBE_API_KEY)
-# ---------------------------------------------------------------------------
 
 
 @mcp.tool(name="api.search")
@@ -328,26 +237,13 @@ def tool_api_search(
     published_after: str | None = None,
     channel_id: str | None = None,
 ) -> dict[str, Any]:
-    """Search YouTube via the Data API v3.
-
-    USE WHEN: YOUTUBE_API_KEY is set and you want clean structured results.
-    DO NOT USE WHEN: no key — use scrape.search.
-    OUTPUT SHAPE: envelope wrapping list of {id, title, channel, channel_id,
-                  published_at, description_excerpt, url}.
-    QUOTA: 1 unit in the Search Queries bucket; default allocation is 100 calls/day.
-    """
+    """Search YouTube via Data API v3."""
     return _api_search(query, max_results, order, published_after, channel_id)
 
 
 @mcp.tool(name="api.channel_stats")
 def tool_api_channel_stats(channel_id_or_handle: str) -> dict[str, Any]:
-    """Channel stats — subs, total views, video count, custom URL.
-
-    USE WHEN: you need creator-size signals or canonical channel meta.
-    DO NOT USE WHEN: you only need recent uploads — use skeleton.build.
-    OUTPUT SHAPE: envelope wrapping channel record.
-    QUOTA: 1 unit.
-    """
+    """Return channel statistics and canonical metadata."""
     return _api_channel_stats(channel_id_or_handle)
 
 
@@ -357,31 +253,19 @@ def tool_api_trending(
     category_id: str | None = None,
     n: int = 20,
 ) -> dict[str, Any]:
-    """Trending videos for a region.
-
-    USE WHEN: you want what's currently popular for content research.
-    DO NOT USE WHEN: you have a specific topic — use api.search or scrape.search.
-    OUTPUT SHAPE: envelope wrapping list of lean video records.
-    QUOTA: 1 unit.
-    """
+    """Return currently popular videos for a region/category."""
     return _api_trending(region, category_id, n)
 
 
 @mcp.tool(name="api.video_categories")
 def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
-    """List YouTube category ids for a region.
-
-    USE WHEN: you need a numeric category id for filtering trending/search.
-    DO NOT USE WHEN: you don't care about category filters.
-    OUTPUT SHAPE: envelope wrapping list of {id, title}.
-    QUOTA: 1 unit.
-    """
+    """List YouTube category IDs for a region."""
     return _api_video_categories(region)
 
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,expire,index}, corpus.{prepare,search}, "
+    "skeleton.{build,list,get,expire,index}, corpus.{hydrate,prepare,search}, "
     "frame.get, audio.get | tier-2: "
     "api.{search,channel_stats,trending,video_categories}"
 )
