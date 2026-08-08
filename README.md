@@ -64,6 +64,7 @@ One documented exception: `skeleton.build(target='channel')` upgrades to Data AP
 - `skeleton.build(target='channel'|'topic', value, limit=50)` — freeze one channel/topic snapshot.
 - `skeleton.list(handle)`
 - `skeleton.get(handle)`
+- `skeleton.diff(base_handle, head_handle)` — deterministic add/remove/change comparison between frozen revisions of the same scope.
 - `skeleton.index(target=None)`
 - `skeleton.expire(handle)`
 
@@ -186,6 +187,8 @@ Storage is XDG-aware: `$XDG_CACHE_HOME/youtube-mcp` when a valid absolute XDG ca
 - visual evidence is frozen by SHA-256 before indexing,
 - clip plans live under `edit-plans/`,
 - materialized editor clips live under `editor-clips/` and are SHA-256 identified in materialized manifests.
+
+Skeleton handles include microseconds and are created exclusively, so a collision cannot overwrite history. Legacy second-resolution handles remain readable.
 
 ## Install
 

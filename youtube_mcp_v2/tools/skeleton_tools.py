@@ -1,8 +1,8 @@
 """skeleton.* — frozen reference objects for multi-step research.
 
 Once built, a skeleton is read-only. Re-running build creates a new handle. Old
-handles remain queryable forever (revision discipline). v0.3 ML tools will
-attach vectors to existing skeleton videoIds without modifying the skeleton.
+handles remain queryable forever (revision discipline). Future corpus/ML tools
+attach enrichment alongside existing videoIds without modifying the snapshot.
 """
 
 from __future__ import annotations
@@ -17,23 +17,22 @@ def _build_channel(value: str, limit: int) -> tuple[dict[str, Any], str]:
     """Channel skeleton builder. Returns (raw_data, source).
 
     Auto-upgrades to tier-2 Data API v3 (full enumeration) when YOUTUBE_API_KEY
-    is set; otherwise scrapes the /videos tab (~30 most recent uploads). The
-    on-disk skeleton's `source` field reflects which path ran so the LLM and
-    future inspections can reason about provenance.
+    is set; otherwise scrapes the /videos tab. The on-disk skeleton's `source`
+    field reflects which path ran so future comparisons preserve provenance.
     """
     if os.environ.get("YOUTUBE_API_KEY"):
-        # Tier-2 path. Imported lazily to keep the optional [api] dep optional.
         from ..adapters import data_api
         try:
             raw = data_api.channel_uploads(value, limit=limit)
             return raw, "api"
         except (data_api.ApiAuthError, data_api.ApiQuotaError, data_api.ApiCallError):
-            # Fall through to scrape — auto-upgrade is best-effort, not a hard dep.
+            # Auto-upgrade is best-effort; fall back to the no-key path.
             pass
 
     raw = isolation.run_isolated(
         "youtube_mcp_v2.adapters.channel_scrape.fetch_channel_uploads",
-        value, limit,
+        value,
+        limit,
         timeout_s=25,
     )
     return raw, "scrape"
@@ -43,7 +42,8 @@ def _build_topic(value: str, limit: int) -> dict[str, Any]:
     """Tier-1: scrape search results, reshape into skeleton-video schema."""
     results = isolation.run_isolated(
         "youtube_mcp_v2.adapters.search_scrape.search_videos",
-        value, limit,
+        value,
+        limit,
         timeout_s=20,
     )
     videos = []
@@ -53,18 +53,17 @@ def _build_topic(value: str, limit: int) -> dict[str, Any]:
             "title": r["title"],
             "channel": r.get("channel", ""),
             "channel_id": r.get("channel_id", ""),
-            "duration_s": None,            # search results don't expose seconds
+            "duration_s": None,
             "duration_text": r.get("duration", ""),
             "published": r.get("published", ""),
             "view_count": r.get("views", ""),
             "thumbnail_url": f"https://i.ytimg.com/vi/{r['id']}/hqdefault.jpg",
-            # Reserved nullable fields — populated later by inspect.video / ml.embed.
             "has_transcript": None,
             "caption_track_id": None,
             "lang": None,
         })
     return {
-        "channel": None,           # topic skeletons aren't tied to one channel
+        "channel": None,
         "videos": videos,
     }
 
@@ -74,21 +73,11 @@ def skeleton_build(
     value: str,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Build a frozen reference of videos for a channel or topic.
-
-    USE WHEN target='channel': you want a stable list of a creator's recent
-                               uploads to fan downstream calls (transcripts,
-                               frames) against — without re-fetching.
-    USE WHEN target='topic':   you want a frozen snapshot of search results for
-                               a query, e.g. for comparison or later semantic
-                               search (v0.3 ml.search_skeleton).
-    DO NOT USE WHEN: you only need a one-shot search — call scrape.search.
-    OUTPUT SHAPE: envelope wrapping {handle, target, value, source, count}.
-                  The full skeleton is on disk; use skeleton.get to load it.
-    """
+    """Build a frozen reference of videos for a channel or topic."""
     if target not in ("channel", "topic"):
         return envelope.fail(
-            "bad_target", f"target must be 'channel' or 'topic', got {target!r}",
+            "bad_target",
+            f"target must be 'channel' or 'topic', got {target!r}",
             recoverable=False,
         )
     if not value or not value.strip():
@@ -118,7 +107,16 @@ def skeleton_build(
         "channel": raw.get("channel"),
         "videos": raw.get("videos", []),
     }
-    _skeleton.save_skeleton(payload)
+    try:
+        _skeleton.save_skeleton(payload)
+    except FileExistsError:
+        # This should be extraordinarily rare with microsecond handles, but the
+        # storage layer intentionally refuses to violate frozen-snapshot history.
+        return envelope.fail(
+            "skeleton_handle_collision",
+            f"refusing to overwrite existing skeleton handle {handle}",
+            recoverable=True,
+        )
 
     return envelope.ok(
         {
@@ -133,16 +131,7 @@ def skeleton_build(
 
 
 def skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
-    """List the videos in a skeleton.
-
-    USE WHEN: iterating videos for downstream batch ops (e.g. inspect each, then
-              fetch transcripts for the ones with captions).
-    DO NOT USE WHEN: you need the channel meta or build provenance — use skeleton.get.
-    OUTPUT SHAPE: envelope wrapping list of video entries. With enrich=True
-                  (default), nullable fields (has_transcript, lang_default,
-                  duration_s, etc.) are filled from the cache where available;
-                  the on-disk skeleton itself is never modified.
-    """
+    """List the videos in a skeleton."""
     try:
         data = _skeleton.load_skeleton(handle)
     except FileNotFoundError as e:
@@ -157,13 +146,7 @@ def skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
 
 
 def skeleton_get(handle: str) -> dict[str, Any]:
-    """Load the full skeleton snapshot.
-
-    USE WHEN: you need the build provenance (built_at, source, channel meta) or
-              the raw frozen video list as captured at build time.
-    DO NOT USE WHEN: you only need the videos themselves — use skeleton.list.
-    OUTPUT SHAPE: envelope wrapping full skeleton dict.
-    """
+    """Load the full frozen skeleton snapshot."""
     try:
         data = _skeleton.load_skeleton(handle)
     except FileNotFoundError as e:
@@ -173,16 +156,32 @@ def skeleton_get(handle: str) -> dict[str, Any]:
     return envelope.ok(data, source="cache")
 
 
-def skeleton_expire(handle: str) -> dict[str, Any]:
-    """Mark a skeleton stale. Does NOT delete (revision discipline).
+def skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:
+    """Diff two frozen revisions of the same channel/topic scope.
 
-    USE WHEN: a skeleton's underlying channel/topic has changed enough that
-              downstream consumers should rebuild — but you want the old data
-              preserved for diff/audit.
-    DO NOT USE WHEN: you want to discard the data — that's not supported on
-                     purpose. Build a new handle and ignore the old one instead.
-    OUTPUT SHAPE: envelope wrapping {handle, expired_at}.
+    USE WHEN: you built the same channel/topic at two points in time and need to
+              know what was added, removed, or changed without consulting live
+              YouTube state.
+    DO NOT USE WHEN: comparing unrelated channels/topics; build comparable
+                     revisions first.
+    OUTPUT SHAPE: envelope wrapping handles/scope, counts, added[], removed[],
+                  changed[] and source-change provenance.
     """
+    try:
+        result = _skeleton.diff_skeletons(base_handle, head_handle)
+    except FileNotFoundError as e:
+        return envelope.fail("skeleton_not_found", str(e), recoverable=False)
+    except _skeleton.SkeletonScopeMismatch as e:
+        return envelope.fail("scope_mismatch", str(e), recoverable=False)
+    except _skeleton.SkeletonDiffError as e:
+        return envelope.fail("skeleton_diff_invalid", str(e), recoverable=False)
+    except ValueError as e:
+        return envelope.fail("bad_handle", str(e), recoverable=False)
+    return envelope.ok(result, source="cache")
+
+
+def skeleton_expire(handle: str) -> dict[str, Any]:
+    """Mark a skeleton stale. Does NOT delete or alter captured membership."""
     try:
         data = _skeleton.expire_skeleton(handle)
     except FileNotFoundError as e:
@@ -196,12 +195,6 @@ def skeleton_expire(handle: str) -> dict[str, Any]:
 
 
 def skeleton_index(target: str | None = None) -> dict[str, Any]:
-    """List all skeletons on disk (summary view).
-
-    USE WHEN: discovering what skeletons already exist before building a new one.
-    DO NOT USE WHEN: you already know the handle.
-    OUTPUT SHAPE: envelope wrapping list of {handle, target, value, built_at,
-                  expired_at, video_count, source}.
-    """
+    """List all skeletons on disk (summary view)."""
     summaries = _skeleton.list_skeletons(target=target)
     return envelope.ok(summaries, source="cache")
