@@ -1,4 +1,4 @@
-"""Corpus evidence-search tools.
+"""Corpus evidence-search and hydration tools.
 
 Legacy `skeleton.*` handles are accepted as corpus revision identifiers. This is
 intentional: the public vocabulary can evolve toward `corpus.*` without making
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from .. import corpus_index, embeddings, envelope, hybrid_index
+from .. import corpus_hydration, corpus_index, embeddings, envelope, hybrid_index
 
 SemanticMode = Literal["off", "auto", "required"]
 
@@ -58,6 +58,48 @@ def _prepare_for_mode(
     if coverage:
         warnings.append(coverage)
     return prepared, warnings
+def corpus_hydrate(
+    handle: str,
+    lang: str = "en",
+    cursor: str | None = None,
+    batch_size: int = corpus_hydration.DEFAULT_BATCH_SIZE,
+    max_workers: int = corpus_hydration.DEFAULT_MAX_WORKERS,
+    policy: Literal["missing", "fresh"] = "missing",
+) -> dict[str, Any]:
+    """Populate transcript cache for one bounded/resumable corpus batch.
+
+    Returns compact acquisition status only; transcript bodies remain in the
+    append-only cache for later `corpus.prepare` / `corpus.search`.
+    """
+    try:
+        result = corpus_hydration.hydrate_corpus(
+            handle,
+            lang=lang,
+            cursor=cursor,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            policy=policy,
+        )
+    except FileNotFoundError as exc:
+        return envelope.fail("corpus_not_found", str(exc), recoverable=False)
+    except corpus_hydration.CorpusHydrationError as exc:
+        return envelope.fail("corpus_hydrate_failed", str(exc), recoverable=False)
+    except Exception as exc:
+        return envelope.fail("corpus_hydrate_failed", str(exc))
+
+    warnings: list[str] = []
+    if result["failed"]:
+        warnings.append(
+            f"{result['failed']} transcript acquisition attempt(s) failed in this batch; "
+            "restart from cursor 0 later to retry unresolved members while cached "
+            "successes are skipped"
+        )
+    return envelope.ok(
+        result,
+        source="cache",
+        validated=(result["failed"] == 0),
+        warnings=warnings,
+    )
 
 
 def corpus_prepare(

@@ -45,7 +45,7 @@ Engineering examples are useful stress tests, but engineering has no privileged 
 
 One documented exception: `skeleton.build(target='channel')` upgrades to Data API enumeration when an API key is present. Provenance reports which path ran.
 
-## Tools (20)
+## Tools (21)
 
 ### Pre-flight
 
@@ -78,6 +78,10 @@ Historical `skeleton.*` handles are valid corpus revision identifiers.
 Composition performs **no live YouTube acquisition**. New direct videos use cached metadata when available and can be inspected/hydrated later. See `CORPUS_COMPOSITION.md`.
 
 ### Transcript evidence
+
+- `corpus.hydrate(handle, lang='en', cursor=None, batch_size=8, max_workers=3, policy='missing'|'fresh')` — acquires one bounded, resumable batch of missing or stale transcripts. It returns compact status/provenance, not transcript bodies; continue with `next_cursor`.
+
+Hydration failures advance the cursor, so one unavailable video cannot stall a corpus. Restarting at cursor `0` later retries only unresolved members because cached successes are skipped. See `CORPUS_HYDRATION.md`.
 
 - `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)`
 - `corpus.prepare(handle, ..., semantic='auto')`
@@ -168,6 +172,8 @@ Tools use a common top-level success/failure shape:
 ```
 
 Acquisition/search tools add provenance where known. Errors are structured rather than crashing the MCP process.
+
+`corpus.hydrate` and `corpus.search` prevent corpus size from becoming model-context size: hydration returns status/provenance, while retrieval returns only leading timestamped evidence chunks.
 
 ## Cache and reproducibility
 
