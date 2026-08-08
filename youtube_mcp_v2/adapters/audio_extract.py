@@ -2,6 +2,10 @@
 
 Outputs are cached under the shared XDG-aware youtube-mcp cache root and are
 intended for downstream transcription or audio-analysis tools.
+
+The yt-dlp download path reuses the same proxy/cookie environment configuration
+as the independent caption fallback so local STT can reach authenticated or
+routed videos without creating a second credential surface.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from pathlib import Path
 
 from ..paths import AUDIO_DIR as _DEFAULT_AUDIO_DIR
 from ..paths import CACHE_DIR as _DEFAULT_CACHE_DIR
+from . import ytdlp_transcript
 
 CACHE_DIR = _DEFAULT_CACHE_DIR
 AUDIO_DIR = _DEFAULT_AUDIO_DIR
@@ -65,6 +70,12 @@ def _run(cmd: list[str], timeout_s: int) -> subprocess.CompletedProcess:
 
 def _download_audio(video_id: str, dest_dir: Path) -> Path:
     out_template = str(dest_dir / "%(id)s.%(ext)s")
+    try:
+        settings = ytdlp_transcript.settings_from_env()
+    except ValueError as exc:
+        # Configuration error wording contains variable names, never values.
+        raise AudioExtractError(str(exc)) from exc
+
     cmd = [
         YT_DLP,
         "--no-playlist",
@@ -74,12 +85,19 @@ def _download_audio(video_id: str, dest_dir: Path) -> Path:
         "ba/bestaudio/best",
         "-o",
         out_template,
+        *ytdlp_transcript._auth_network_args(settings),
         f"https://www.youtube.com/watch?v={video_id}",
     ]
     cp = _run(cmd, DOWNLOAD_TIMEOUT_S)
     if cp.returncode != 0:
+        diagnostic = ytdlp_transcript._redact(
+            (cp.stderr or cp.stdout or "").strip(), settings
+        )
+        if len(diagnostic) > 400:
+            diagnostic = diagnostic[:400] + "…"
         raise AudioExtractError(
-            f"yt-dlp failed (rc={cp.returncode}): {cp.stderr.strip()[:400]}"
+            f"yt-dlp failed (rc={cp.returncode})"
+            + (f": {diagnostic}" if diagnostic else "")
         )
 
     candidates = list(dest_dir.glob(f"{video_id}.*"))

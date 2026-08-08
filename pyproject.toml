@@ -9,6 +9,7 @@ dependencies = [
     "mcp>=2.0,<3",
     "python-dotenv>=1.0,<2",
     "youtube-transcript-api>=1.1,<2",
+    "yt-dlp>=2026.7.4,<2027",
     "httpx>=0.27,<1",
     "beautifulsoup4>=4.13,<5",
 ]
@@ -18,11 +19,11 @@ api = ["google-api-python-client>=2.0"]
 # FastEmbed 0.8 keeps semantic retrieval local/portable through ONNX Runtime
 # without making model inference a core dependency for lexical-only installs.
 semantic = ["fastembed>=0.8,<0.9"]
-# Keep the legacy `frame` extra working while giving media extraction a name
-# that accurately covers both frame.get and audio.get.
-frame = ["yt-dlp>=2024.1"]
-audio = ["yt-dlp>=2024.1"]
-media = ["yt-dlp>=2024.1"]
+# Compatibility aliases: yt-dlp is now a core dependency because it backs the
+# independent transcript fallback as well as media acquisition.
+frame = ["yt-dlp>=2026.7.4,<2027"]
+audio = ["yt-dlp>=2026.7.4,<2027"]
+media = ["yt-dlp>=2026.7.4,<2027"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]

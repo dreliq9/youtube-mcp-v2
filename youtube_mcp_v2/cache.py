@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS transcripts (
     lang TEXT NOT NULL,
     actual_lang TEXT,
     is_generated INTEGER,
+    provider TEXT,
+    method TEXT,
+    attempts_json TEXT,
+    details_json TEXT,
     text TEXT NOT NULL,
     segments_json TEXT,
     word_count INTEGER,
@@ -64,15 +68,26 @@ def _ensure_cache_dir() -> None:
 
 
 def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
-    """Apply additive migrations without rewriting historical rows."""
+    """Apply additive migrations without rewriting historical rows.
+
+    Old rows remain valid. Newly introduced provenance columns are NULL for
+    revisions fetched before the server learned to record them.
+    """
     columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(transcripts)").fetchall()
     }
-    if "actual_lang" not in columns:
-        conn.execute("ALTER TABLE transcripts ADD COLUMN actual_lang TEXT")
-    if "is_generated" not in columns:
-        conn.execute("ALTER TABLE transcripts ADD COLUMN is_generated INTEGER")
+    additions = {
+        "actual_lang": "TEXT",
+        "is_generated": "INTEGER",
+        "provider": "TEXT",
+        "method": "TEXT",
+        "attempts_json": "TEXT",
+        "details_json": "TEXT",
+    }
+    for name, sql_type in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE transcripts ADD COLUMN {name} {sql_type}")
 
 
 @contextmanager
@@ -119,18 +134,34 @@ def put_transcript(
     *,
     actual_lang: str | None = None,
     is_generated: bool | None = None,
+    provider: str | None = None,
+    method: str | None = None,
+    attempts: list[dict[str, Any]] | None = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
+    """Append one transcript revision with the acquisition path that produced it.
+
+    `lang` is the requested language and remains the lookup key. `actual_lang`
+    records the track that was actually returned after fallback. Provider-specific
+    `details` must already be safe for MCP exposure (for example hashes/model
+    identity, never local filesystem paths or credentials).
+    """
     with connect() as conn:
         conn.execute(
             "INSERT INTO transcripts "
-            "(video_id, lang, actual_lang, is_generated, text, segments_json, "
-            " word_count, fetched_at, validated, warnings_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(video_id, lang, actual_lang, is_generated, provider, method, "
+            " attempts_json, details_json, text, segments_json, word_count, fetched_at, "
+            " validated, warnings_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 video_id,
                 lang,
                 actual_lang,
                 None if is_generated is None else (1 if is_generated else 0),
+                provider,
+                method,
+                json.dumps(attempts) if attempts is not None else None,
+                json.dumps(details) if details is not None else None,
                 text,
                 json.dumps(segments) if segments is not None else None,
                 word_count,
@@ -175,7 +206,8 @@ def put_video_meta(video_id: str, payload: dict[str, Any]) -> None:
 
 
 def get_video_meta(
-    video_id: str, *, fresh_only: bool = True
+    video_id: str, *,
+    fresh_only: bool = True,
 ) -> tuple[dict[str, Any], int] | None:
     with connect() as conn:
         row = conn.execute(
