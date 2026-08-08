@@ -93,7 +93,7 @@ ENVELOPE_KEYS = {"data", "fetched_at", "source", "cache_age_s",
 
 def _assert_envelope_shape(env: dict) -> None:
     assert ENVELOPE_KEYS.issubset(env.keys()), f"missing keys: {ENVELOPE_KEYS - env.keys()}"
-    assert env["source"] in ("scrape", "api", "cache")
+    assert env["source"] in ("scrape", "yt-dlp", "api", "cache")
     assert isinstance(env["warnings"], list)
     if env["error"] is not None:
         for k in ("code", "message", "recoverable"):

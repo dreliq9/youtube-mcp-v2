@@ -43,7 +43,7 @@ Engineering examples are useful stress tests, but engineering has no privileged 
 | 1 | `inspect.*`, `transcript.*`, `frame.*`, `audio.*`, `media.*`, `scrape.*`, `skeleton.*`, `corpus.*` | none | free/local compute plus explicit media acquisition |
 | 2 | `api.*` | `YOUTUBE_API_KEY` | YouTube quota |
 
-One documented exception: `skeleton.build(target='channel')` upgrades to Data API enumeration when an API key is present. Provenance reports which path ran.
+One documented exception: `skeleton.build(target='channel')` upgrades to Data API enumeration when an API key is present. Without an API key it first parses the channel page, then falls back to yt-dlp enumeration if YouTube's page markup yields no videos. Provenance reports which path ran.
 
 ## Tools (21)
 
@@ -61,7 +61,7 @@ One documented exception: `skeleton.build(target='channel')` upgrades to Data AP
 
 ### Frozen source sets
 
-- `skeleton.build(target='channel'|'topic', value, limit=50)` — freeze one channel/topic snapshot.
+- `skeleton.build(target='channel'|'topic', value, limit=50)` — freeze one channel/topic snapshot. Channel capture reports `scrape`, `yt-dlp`, or `api` provenance.
 - `skeleton.list(handle)`
 - `skeleton.get(handle)`
 - `skeleton.diff(base_handle, head_handle)` — deterministic add/remove/change comparison between frozen revisions of the same scope.
@@ -164,7 +164,7 @@ Tools use a common top-level success/failure shape:
 {
   "data": "<tool-specific payload or null>",
   "fetched_at": "...",
-  "source": "scrape | api | cache",
+  "source": "scrape | yt-dlp | api | cache",
   "cache_age_s": 0,
   "validated": true,
   "warnings": [],

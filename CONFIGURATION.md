@@ -75,7 +75,7 @@ YOUTUBE_COOKIES_FROM_BROWSER=firefox
 
 Cookie-file handling follows yt-dlp's requirements; cookie files should not be committed to the repository.
 
-The same yt-dlp proxy/cookie configuration is reused by `audio.get` and by the audio-download stage of local STT. This keeps caption fallback and local transcription on one credential/routing surface.
+The same yt-dlp proxy/cookie configuration is reused by `audio.get`, channel-snapshot fallback when page markup yields no videos, and the audio-download stage of local STT. This keeps caption fallback, source discovery, and local transcription on one credential/routing surface.
 
 ## Local whisper.cpp STT
 

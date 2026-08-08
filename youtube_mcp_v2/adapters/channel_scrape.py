@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from typing import Any
 
 import httpx
+
+from . import ytdlp_transcript
 
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -24,6 +28,8 @@ _USER_AGENT = (
 
 _CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
 _HANDLE_RE = re.compile(r"^@[A-Za-z0-9._-]+$")
+YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
+YT_DLP_TIMEOUT_S = 20
 
 
 def _resolve_url(value: str) -> str:
@@ -95,6 +101,86 @@ def _walk_video_renderers(data: dict[str, Any]) -> list[dict[str, Any]]:
 
     visit(data)
     return found
+
+
+def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
+    """Enumerate recent channel uploads through yt-dlp's stable playlist view."""
+    settings = ytdlp_transcript.settings_from_env()
+    cmd = [
+        YT_DLP,
+        "--flat-playlist",
+        "--playlist-end",
+        str(limit),
+        "--print-json",
+        *ytdlp_transcript._auth_network_args(settings),
+        _resolve_url(value),
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=YT_DLP_TIMEOUT_S,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("yt-dlp executable not found for channel fallback") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"yt-dlp exceeded {YT_DLP_TIMEOUT_S}s for channel fallback") from exc
+
+    if completed.returncode != 0:
+        diagnostic = ytdlp_transcript._redact(
+            (completed.stderr or completed.stdout or "").strip(), settings
+        )
+        if len(diagnostic) > 500:
+            diagnostic = diagnostic[:500] + "…"
+        raise RuntimeError(
+            f"yt-dlp channel fallback failed (rc={completed.returncode})"
+            + (f": {diagnostic}" if diagnostic else "")
+        )
+
+    videos: list[dict[str, Any]] = []
+    channel: dict[str, str] = {"id": "", "handle": "", "title": "", "url": _resolve_url(value)}
+    for line in completed.stdout.splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        video_id = entry.get("id")
+        if not isinstance(video_id, str) or not video_id:
+            continue
+        if not channel["id"]:
+            channel = {
+                "id": str(entry.get("playlist_channel_id") or ""),
+                "handle": str(entry.get("playlist_uploader_id") or ""),
+                "title": str(entry.get("playlist_channel") or entry.get("playlist_uploader") or ""),
+                "url": str(entry.get("playlist_webpage_url") or _resolve_url(value)),
+            }
+        thumbnails = entry.get("thumbnails")
+        thumbnail_url = ""
+        if isinstance(thumbnails, list) and thumbnails:
+            last = thumbnails[-1]
+            if isinstance(last, dict):
+                thumbnail_url = str(last.get("url") or "")
+        videos.append(
+            {
+                "id": video_id,
+                "title": str(entry.get("title") or ""),
+                "duration_s": entry.get("duration") if isinstance(entry.get("duration"), int) else None,
+                "duration_text": str(entry.get("duration_string") or ""),
+                "published": str(entry.get("upload_date") or ""),
+                "view_count": entry.get("view_count") if isinstance(entry.get("view_count"), int) else "",
+                "thumbnail_url": thumbnail_url or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                "has_transcript": None,
+                "caption_track_id": None,
+                "lang": None,
+            }
+        )
+    if not videos:
+        raise RuntimeError("yt-dlp channel fallback returned no video entries")
+    return {"channel": channel, "videos": videos, "source": "yt-dlp"}
 
 
 def fetch_channel_uploads(value: str, limit: int = 30) -> dict[str, Any]:
@@ -173,7 +259,7 @@ def fetch_channel_uploads(value: str, limit: int = 30) -> dict[str, Any]:
         if len(videos) >= limit:
             break
 
-    return {
+    result = {
         "channel": {
             "id": channel_id,
             "handle": channel_handle,
@@ -181,4 +267,10 @@ def fetch_channel_uploads(value: str, limit: int = 30) -> dict[str, Any]:
             "url": url,
         },
         "videos": videos,
+        "source": "scrape",
     }
+    if videos:
+        return result
+    fallback = _fetch_channel_uploads_with_ytdlp(value, limit)
+    fallback["source"] = "yt-dlp"
+    return fallback

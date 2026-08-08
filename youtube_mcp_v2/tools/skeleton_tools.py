@@ -35,7 +35,7 @@ def _build_channel(value: str, limit: int) -> tuple[dict[str, Any], str]:
         limit,
         timeout_s=25,
     )
-    return raw, "scrape"
+    return raw, raw.get("source", "scrape")
 
 
 def _build_topic(value: str, limit: int) -> dict[str, Any]:
