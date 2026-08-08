@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Compile
+        run: python -m compileall -q youtube_mcp_v2 tests
+      - name: Test without live upstreams
+        run: python -m pytest -m "not network and not slow" -q
+
+  platform-smoke:
+    name: Import smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e .
+      - name: Import MCP server
+        run: python -c "from mcp.server import MCPServer; from youtube_mcp_v2.server import mcp; assert isinstance(mcp, MCPServer)"
+
+  semantic-smoke:
+    name: Optional semantic package smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install semantic extra
+        run: python -m pip install -e ".[semantic]"
+      - name: Verify FastEmbed text + visual APIs without model download
+        run: >-
+          python -c "from fastembed import ImageEmbedding, TextEmbedding;
+          from youtube_mcp_v2.embeddings import DEFAULT_MODEL_ID;
+          from youtube_mcp_v2.visual_embeddings import DEFAULT_IMAGE_MODEL, DEFAULT_TEXT_MODEL;
+          text_models = TextEmbedding.list_supported_models();
+          image_models = ImageEmbedding.list_supported_models();
+          assert any(m.get('model') == DEFAULT_MODEL_ID for m in text_models);
+          assert any(m.get('model') == DEFAULT_TEXT_MODEL for m in text_models);
+          assert any(m.get('model') == DEFAULT_IMAGE_MODEL for m in image_models);
+          print(DEFAULT_MODEL_ID, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL)"

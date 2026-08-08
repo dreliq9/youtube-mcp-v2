@@ -1,7 +1,4 @@
-"""Versioned SQLite cache. Append-only — new fetches insert new rows, never overwrite.
-
-Cache lives at ~/.cache/youtube-mcp/v2.sqlite (XDG-canonical).
-"""
+"""Versioned SQLite cache. Append-only — new fetches insert new rows, never overwrite."""
 
 from __future__ import annotations
 
@@ -12,8 +9,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-CACHE_DIR = Path.home() / ".cache" / "youtube-mcp"
-CACHE_PATH = CACHE_DIR / "v2.sqlite"
+from .paths import CACHE_DIR as _DEFAULT_CACHE_DIR
+from .paths import SQLITE_PATH as _DEFAULT_CACHE_PATH
+
+# Module aliases are intentionally retained because tests/downstream callers have
+# historically monkeypatched these names directly.
+CACHE_DIR = _DEFAULT_CACHE_DIR
+CACHE_PATH = _DEFAULT_CACHE_PATH
 
 TTL_TRANSCRIPTS = timedelta(days=30)
 TTL_VIDEO_META = timedelta(days=7)
@@ -25,6 +27,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     video_id TEXT NOT NULL,
     lang TEXT NOT NULL,
+    actual_lang TEXT,
+    is_generated INTEGER,
     text TEXT NOT NULL,
     segments_json TEXT,
     word_count INTEGER,
@@ -59,6 +63,18 @@ def _ensure_cache_dir() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Apply additive migrations without rewriting historical rows."""
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(transcripts)").fetchall()
+    }
+    if "actual_lang" not in columns:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN actual_lang TEXT")
+    if "is_generated" not in columns:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN is_generated INTEGER")
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     _ensure_cache_dir()
@@ -66,6 +82,7 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        _ensure_schema_migrations(conn)
         yield conn
         conn.commit()
     finally:
@@ -99,15 +116,21 @@ def put_transcript(
     word_count: int,
     validated: bool,
     warnings: list[str],
+    *,
+    actual_lang: str | None = None,
+    is_generated: bool | None = None,
 ) -> None:
     with connect() as conn:
         conn.execute(
             "INSERT INTO transcripts "
-            "(video_id, lang, text, segments_json, word_count, fetched_at, validated, warnings_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(video_id, lang, actual_lang, is_generated, text, segments_json, "
+            " word_count, fetched_at, validated, warnings_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 video_id,
                 lang,
+                actual_lang,
+                None if is_generated is None else (1 if is_generated else 0),
                 text,
                 json.dumps(segments) if segments is not None else None,
                 word_count,
@@ -124,7 +147,6 @@ def get_transcript(
     *,
     fresh_only: bool = True,
 ) -> tuple[dict[str, Any], int] | None:
-    """Return (row_dict, age_seconds) for the most recent cached transcript, or None."""
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM transcripts WHERE video_id = ? AND lang = ? "
