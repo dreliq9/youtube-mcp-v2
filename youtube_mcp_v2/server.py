@@ -12,7 +12,7 @@ from mcp.server import MCPServer
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
-from . import visual_resources
+from . import artifacts, visual_resources
 from .tools.inspect import inspect_video as _inspect_video
 from .tools.transcript import transcript_get as _transcript_get
 from .tools.scrape import scrape_search as _scrape_search
@@ -89,7 +89,7 @@ def tool_transcript_get(
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — search (no key)
+# Tier 1 — search
 # ---------------------------------------------------------------------------
 
 
@@ -100,7 +100,7 @@ def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — skeletons (frozen reference objects)
+# Tier 1 — frozen skeletons
 # ---------------------------------------------------------------------------
 
 
@@ -328,8 +328,13 @@ def tool_frame_get(
 ) -> dict[str, Any]:
     """Extract one frame or a contact sheet from a YouTube video."""
     return _frame_get(
-        url_or_id, mode=mode, timestamp_s=timestamp_s,
-        n=n, layout=layout, size=size, fmt=fmt,
+        url_or_id,
+        mode=mode,
+        timestamp_s=timestamp_s,
+        n=n,
+        layout=layout,
+        size=size,
+        fmt=fmt,
     )
 
 
@@ -372,7 +377,91 @@ def tool_media_materialize(
 
 
 # ---------------------------------------------------------------------------
-# Tier 2 — Data API v3 (BYO YOUTUBE_API_KEY)
+# Binary MCP resources — remote-safe access to persisted media
+# ---------------------------------------------------------------------------
+# MCP Python SDK v2 automatically returns bytes as BlobResourceContents. Each
+# template has a static MIME type so hosts can consume the artifact directly.
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/frame/png/{video_id}/{name}",
+    mime_type="image/png",
+)
+def resource_frame_png(video_id: str, name: str) -> bytes:
+    """Read a persisted PNG frame/contact-sheet artifact."""
+    return artifacts.read_resource(
+        kind="frame", ext="png", video_id=video_id, name=name
+    )
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/frame/jpg/{video_id}/{name}",
+    mime_type="image/jpeg",
+)
+def resource_frame_jpg(video_id: str, name: str) -> bytes:
+    """Read a persisted JPEG frame/contact-sheet artifact."""
+    return artifacts.read_resource(
+        kind="frame", ext="jpg", video_id=video_id, name=name
+    )
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/audio/wav/{video_id}/{name}",
+    mime_type="audio/wav",
+)
+def resource_audio_wav(video_id: str, name: str) -> bytes:
+    """Read a persisted WAV audio artifact."""
+    return artifacts.read_resource(
+        kind="audio", ext="wav", video_id=video_id, name=name
+    )
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/audio/m4a/{video_id}/{name}",
+    mime_type="audio/mp4",
+)
+def resource_audio_m4a(video_id: str, name: str) -> bytes:
+    """Read a persisted M4A audio artifact."""
+    return artifacts.read_resource(
+        kind="audio", ext="m4a", video_id=video_id, name=name
+    )
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/audio/mp3/{video_id}/{name}",
+    mime_type="audio/mpeg",
+)
+def resource_audio_mp3(video_id: str, name: str) -> bytes:
+    """Read a persisted MP3 audio artifact."""
+    return artifacts.read_resource(
+        kind="audio", ext="mp3", video_id=video_id, name=name
+    )
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/audio/flac/{video_id}/{name}",
+    mime_type="audio/flac",
+)
+def resource_audio_flac(video_id: str, name: str) -> bytes:
+    """Read a persisted FLAC audio artifact."""
+    return artifacts.read_resource(
+        kind="audio", ext="flac", video_id=video_id, name=name
+    )
+
+
+@mcp.resource(
+    "youtube-mcp://artifact/audio/ogg/{video_id}/{name}",
+    mime_type="audio/ogg",
+)
+def resource_audio_ogg(video_id: str, name: str) -> bytes:
+    """Read a persisted OGG audio artifact."""
+    return artifacts.read_resource(
+        kind="audio", ext="ogg", video_id=video_id, name=name
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 — YouTube Data API v3
 # ---------------------------------------------------------------------------
 
 
@@ -415,5 +504,5 @@ log.info(
     "skeleton.{build,list,get,expire,index}, "
     "corpus.{compose,hydrate,prepare,search,visual_search,clip_plan}, "
     "frame.get, audio.get, media.materialize | tier-2: "
-    "api.{search,channel_stats,trending,video_categories}"
+    "api.{search,channel_stats,trending,video_categories} | binary media resources registered"
 )
