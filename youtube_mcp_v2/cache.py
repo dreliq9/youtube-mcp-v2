@@ -150,7 +150,7 @@ def get_transcript(
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM transcripts WHERE video_id = ? AND lang = ? "
-            "ORDER BY fetched_at DESC LIMIT 1",
+            "ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (video_id, lang),
         ).fetchone()
     if row is None:
@@ -180,7 +180,7 @@ def get_video_meta(
     with connect() as conn:
         row = conn.execute(
             "SELECT payload_json, fetched_at FROM video_meta WHERE video_id = ? "
-            "ORDER BY fetched_at DESC LIMIT 1",
+            "ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (video_id,),
         ).fetchone()
     if row is None:
@@ -189,3 +189,56 @@ def get_video_meta(
     if fresh_only and not fresh:
         return None
     return json.loads(row["payload_json"]), age
+
+
+# ---------------------------------------------------------------------------
+# Search results
+# ---------------------------------------------------------------------------
+
+
+def put_search_results(query: str, payload: list[dict[str, Any]]) -> None:
+    """Append one search-result revision for a normalized query."""
+    normalized = query.strip()
+    if not normalized:
+        raise ValueError("search query is empty")
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO search_results (query, payload_json, fetched_at) "
+            "VALUES (?, ?, ?)",
+            (normalized, json.dumps(payload), _now_iso()),
+        )
+
+
+def get_search_results(
+    query: str,
+    *,
+    min_results: int = 1,
+    fresh_only: bool = True,
+) -> tuple[list[dict[str, Any]], int] | None:
+    """Return the newest cached search revision that can satisfy `min_results`.
+
+    Search calls can request different result counts. A fresh cached row with only
+    five items must not satisfy a later request for twenty, so lookup walks recent
+    revisions until it finds one with enough rows. The cache remains append-only.
+    """
+    normalized = query.strip()
+    if not normalized:
+        return None
+    min_results = max(1, int(min_results))
+
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT payload_json, fetched_at FROM search_results "
+            "WHERE query = ? ORDER BY fetched_at DESC, id DESC",
+            (normalized,),
+        ).fetchall()
+
+    for row in rows:
+        fresh, age = _is_fresh(row["fetched_at"], TTL_SEARCH)
+        if fresh_only and not fresh:
+            # Rows are newest-first. Once one is stale, every later row is stale.
+            break
+        payload = json.loads(row["payload_json"])
+        if isinstance(payload, list) and len(payload) >= min_results:
+            return payload, age
+    return None
