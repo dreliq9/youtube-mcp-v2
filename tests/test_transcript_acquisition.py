@@ -111,6 +111,45 @@ def test_both_caption_providers_fail_without_local_model_preserves_two_attempts(
     assert exc.provenance["acquisition"]["provider"] is None
 
 
+def test_membership_required_stops_before_local_stt(monkeypatch) -> None:
+    monkeypatch.setattr(
+        transcript_api,
+        "fetch_transcript",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            transcript_api.NoTranscriptFound(VIDEO_ID, ["en"], None)
+        ),
+    )
+    monkeypatch.setattr(
+        ytdlp_transcript,
+        "fetch_transcript",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ytdlp_transcript.YtDlpTranscriptError(
+                "Join this channel to get access to members-only content"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        whisper_cpp,
+        "settings_from_env",
+        lambda: pytest.fail("local STT inspected after members-only response"),
+    )
+    monkeypatch.setattr(
+        whisper_cpp,
+        "transcribe_video",
+        lambda *_a, **_k: pytest.fail("audio download started after members-only response"),
+    )
+
+    with pytest.raises(transcript_acquisition.TranscriptAcquisitionFailed) as exc_info:
+        transcript_acquisition.acquire_transcript(VIDEO_ID)
+
+    exc = exc_info.value
+    assert [(a.provider, a.outcome, a.detail_code) for a in exc.attempts] == [
+        ("youtube-transcript-api", "unavailable", "no_transcript"),
+        ("yt-dlp", "unavailable", "membership_required"),
+    ]
+    assert exc.local_stt_error is None
+
+
 def test_caption_failures_then_local_stt_success_records_model_details(monkeypatch) -> None:
     monkeypatch.setattr(
         transcript_api,

@@ -114,6 +114,15 @@ def _fallback_failure_detail(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, TimeoutError):
         return "timeout", "timeout"
     message = str(exc).lower()
+    if any(
+        marker in message
+        for marker in (
+            "members-only",
+            "members only",
+            "join this channel to get access",
+        )
+    ):
+        return "unavailable", "membership_required"
     if "429" in message or "too many requests" in message or "sign in" in message:
         return "blocked", "request_blocked"
     return "error", "provider_error"
@@ -189,6 +198,13 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
                 detail_code=detail,
             )
         )
+        if detail == "membership_required":
+            raise TranscriptAcquisitionFailed(
+                "yt-dlp reported that channel membership is required",
+                attempts=attempts,
+                primary_error=primary_error,
+                fallback_error=fallback_error,
+            )
     else:
         attempts.append(
             AcquisitionAttempt(
