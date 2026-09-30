@@ -27,11 +27,8 @@ def test_first_deterministic_manifest_has_30_unique_cases() -> None:
 
 def test_deterministic_manifest_passes_against_in_repo_adapter() -> None:
     report = run_manifest(_load_manifest())
-    assert report["summary"]["totals"] == {
-        "passed": 30,
-        "failed": 0,
-        "skipped": 0,
-    }, [
+    totals = report["summary"]["totals"]
+    assert (totals["passed"], totals["failed"], totals["skipped"]) == (30, 0, 0), [
         (case["id"], case.get("mismatches"))
         for case in report["cases"]
         if case["status"] != "passed"
@@ -64,5 +61,5 @@ def test_markdown_report_contains_suite_table() -> None:
     report = run_manifest(_load_manifest())
     rendered = render_markdown(report)
     assert "# YouTube-MCP Bench Report" in rendered
-    assert "| Suite | Passed | Failed | Skipped |" in rendered
+    assert "| Suite | Cases | Passed | Failed |" in rendered
     assert "**Passed:** 30" in rendered

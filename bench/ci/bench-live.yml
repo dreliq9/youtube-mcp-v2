@@ -1,0 +1,53 @@
+# Live-network YouTube-MCP Bench: manual or weekly, never on pull requests.
+#
+# Ready to install: `git mv bench/ci/bench-live.yml .github/workflows/bench-live.yml`
+# (pushing workflow files needs a token with the `workflow` scope).
+#
+# Results are reported (artifacts + job summary), not gated: hosted-runner IPs
+# are frequently throttled by YouTube, and that must not read as a regression.
+name: Benchmark (live)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"  # Mondays 09:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live bench / ${{ matrix.adapter }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [youtube_mcp_v2, mcp_youtube_transcript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install harness + uv (competitor launches via uvx, README default)
+        run: python -m pip install -e ".[dev]" uv
+      - name: Run live cases
+        run: >-
+          python bench/run.py --mode live --adapter ${{ matrix.adapter }} --no-fail
+          --output-dir bench/results/live-${{ matrix.adapter }}
+      - name: Job summary
+        if: always()
+        run: cat bench/results/live-${{ matrix.adapter }}/latest.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-live-${{ matrix.adapter }}
+          path: bench/results/
+          if-no-files-found: warn

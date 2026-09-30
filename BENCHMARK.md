@@ -2,6 +2,8 @@
 
 A market-leading YouTube MCP needs a reproducible definition of "better." The benchmark measures whether an AI can recover trustworthy evidence from video efficiently—not raw endpoint count and not performance in one favored subject area.
 
+> **Implementation status:** `bench/` implements a first executable slice: revisions 0.1 and 0.2. It covers the installation/protocol, metadata, transcript, long-context, and fault-tolerance suites. It adds deterministic upstream fixtures, metric scoring, per-suite CI thresholds, and a transcript-focused competitor adapter. It also includes a small opt-in live set. See `bench/README.md` for what's covered and what's not yet.
+
 ## Core benchmark rule: two independent axes
 
 The dataset must vary along **both**:
