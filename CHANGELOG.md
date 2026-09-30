@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — v0.4 evidence search (issue #5)
+
+### Local STT
+- Local transcription is now a backend interface (`adapters/local_stt.py`) with an optional **mlx-whisper** backend for Apple Silicon (`stt-mlx` extra) beside the existing portable whisper.cpp backend. `YOUTUBE_MCP_STT_BACKEND=auto|mlx-whisper|whisper.cpp|off`; `YOUTUBE_MCP_STT_LANGUAGE` hint.
+- Both backends persist the same `youtube-mcp.local-stt/1` provenance: model identity + revision, decode config, source-audio hash/duration, and segment timing summary. Paths are never recorded.
+
+### Corpus search
+- `corpus.search` gains `filters` (video/channel/time window/validation/acquisition method/generated status).
+- Hits add `evidence_id`, `anchor` (exact matching segment timestamp + URL), `exact_match`, `segment_range`, `validation_status`, frozen transcript `acquisition` provenance, and per-hit corpus/index revisions; responses add a `retrieval` provenance record.
+- Hybrid fusion `rrf-exact-v1` ranks exact identifiers/quoted phrases as their own list so dense similarity cannot bury a part number; older indexes keep `rrf-v1`.
+- Boundary-aware chunker (`timestamp-boundary-v1`) and index schema 2. New indexes get new revisions; pinned older indexes still search identically.
+- Vector search moved behind an internal replaceable seam (`vector_search.py`, `exact-scan-v1`). Hybrid search no longer loads all chunk text to rank.
+- Corpus revisions that carry `manifest_sha256` have it echoed into index metadata and results.
+
+### Benchmark
+- `bench/retrieval_suite.py`: synthetic 12-stratum retrieval benchmark (Recall@k, success@k, MRR, temporal-hit@k, temporal error, window IoU, latency) with thresholds; metric functions in `bench/retrieval_metrics.py`.
+
 ## 0.2.1 — unreleased
 
 ### Compatibility

@@ -19,6 +19,10 @@ api = ["google-api-python-client>=2.0"]
 # FastEmbed 0.8 keeps semantic retrieval local/portable through ONNX Runtime
 # without making model inference a core dependency for lexical-only installs.
 semantic = ["fastembed>=0.8,<0.9"]
+# Local STT on Apple Silicon (YOUTUBE_MCP_STT_BACKEND=auto|mlx-whisper). Heavy:
+# mlx-whisper pulls in torch/numba/scipy, so it is never part of the core or CI
+# install. whisper.cpp needs no Python extra (it is an external binary).
+stt-mlx = ["mlx-whisper>=0.4,<0.5; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 # Compatibility aliases: yt-dlp is now a core dependency because it backs the
 # independent transcript fallback as well as media acquisition.
 frame = ["yt-dlp>=2026.7.4,<2027"]

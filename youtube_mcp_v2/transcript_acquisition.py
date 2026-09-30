@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any
 
-from .adapters import transcript_api, whisper_cpp, ytdlp_transcript
+from .adapters import local_stt, transcript_api, ytdlp_transcript
 from .adapters.transcript_api import TranscriptFetch
 
 
@@ -129,9 +129,9 @@ def _fallback_failure_detail(exc: Exception) -> tuple[str, str]:
 
 
 def _local_stt_failure_detail(exc: Exception) -> tuple[str, str]:
-    if isinstance(exc, whisper_cpp.LocalSttUnavailable):
+    if isinstance(exc, local_stt.LocalSttUnavailable):
         return "unavailable", "local_stt_unavailable"
-    if isinstance(exc, whisper_cpp.LocalSttTimeout):
+    if isinstance(exc, local_stt.LocalSttTimeout):
         return "timeout", "local_stt_timeout"
     return "error", "local_stt_failed"
 
@@ -142,7 +142,8 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
     Waterfall:
       1. youtube-transcript-api captions
       2. yt-dlp caption extraction
-      3. local whisper.cpp STT, only when a model path is explicitly configured
+      3. local STT (mlx-whisper or whisper.cpp via `adapters.local_stt`), only
+         when a local model is explicitly configured
 
     Cache lookup remains above this layer because a cache hit should avoid all
     upstream/local acquisition work. Local STT never downloads a model implicitly.
@@ -221,16 +222,16 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
             attempts=attempts,
         )
 
-    # The model path is the explicit opt-in. If no model is configured, preserve
-    # the existing two-provider behavior and do not report a phantom STT attempt.
+    # A configured local model is the explicit opt-in. If none is configured,
+    # preserve the two-provider behavior and do not report a phantom STT attempt.
     try:
-        local_settings = whisper_cpp.settings_from_env()
+        backend = local_stt.resolve_backend()
     except Exception as exc:
         local_stt_error = exc
         outcome, detail = _local_stt_failure_detail(exc)
         attempts.append(
             AcquisitionAttempt(
-                provider="whisper.cpp",
+                provider=local_stt.backend_name_for_error(exc),
                 method="local_stt",
                 duration_ms=0,
                 outcome=outcome,
@@ -238,19 +239,16 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
             )
         )
     else:
-        if local_settings is not None:
+        if backend is not None:
             started = monotonic()
             try:
-                local = whisper_cpp.transcribe_video(
-                    video_id,
-                    settings=local_settings,
-                )
+                local = backend.transcribe_video(video_id)
             except Exception as exc:
                 local_stt_error = exc
                 outcome, detail = _local_stt_failure_detail(exc)
                 attempts.append(
                     AcquisitionAttempt(
-                        provider="whisper.cpp",
+                        provider=backend.name,
                         method="local_stt",
                         duration_ms=_elapsed_ms(started),
                         outcome=outcome,
@@ -260,7 +258,7 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
             else:
                 attempts.append(
                     AcquisitionAttempt(
-                        provider="whisper.cpp",
+                        provider=backend.name,
                         method="local_stt",
                         duration_ms=_elapsed_ms(started),
                         outcome="success",
@@ -268,7 +266,7 @@ def acquire_transcript(video_id: str, lang: str = "en") -> AcquisitionResult:
                 )
                 return AcquisitionResult(
                     fetch=local.fetch,
-                    provider="whisper.cpp",
+                    provider=backend.name,
                     method="local_stt",
                     attempts=attempts,
                     details=local.provenance,

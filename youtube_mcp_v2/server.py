@@ -26,6 +26,7 @@ from .tools.skeleton_tools import (
 )
 from .tools.corpus_compose import corpus_compose as _corpus_compose
 from .tools.corpus import (
+    CorpusSearchFilters,
     corpus_hydrate as _corpus_hydrate,
     corpus_prepare as _corpus_prepare,
     corpus_search as _corpus_search,
@@ -232,17 +233,27 @@ def tool_corpus_search(
     handle: str,
     query: str,
     top_k: int = 10,
+    filters: CorpusSearchFilters | None = None,
     lang: str = "en",
     index_revision: str | None = None,
     validated_only: bool = False,
     auto_prepare: bool = True,
     semantic: Literal["off", "auto", "required"] = "auto",
 ) -> dict[str, Any]:
-    """Retrieve timestamped spoken evidence across a frozen corpus revision."""
+    """Retrieve timestamped spoken evidence across a frozen corpus revision.
+
+    Hybrid lexical + meaning-based retrieval over an immutable local index; the
+    corpus is never loaded into model context. Exact identifiers (part numbers,
+    names, numbers, quoted phrases) are ranked as their own signal. Each hit has
+    a timestamped URL, start/end seconds, excerpt, per-method scores, transcript
+    acquisition provenance (captions or local STT), validation status, and the
+    transcript, corpus, and index revisions. Pin `index_revision` to reproduce.
+    """
     return _corpus_search(
         handle,
         query,
         top_k=top_k,
+        filters=filters,
         lang=lang,
         index_revision=index_revision,
         validated_only=validated_only,

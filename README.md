@@ -86,9 +86,9 @@ Hydration failures advance the cursor, so one unavailable video cannot stall a c
 
 - `transcript.get(url_or_id, mode='text'|'timed'|'chunked', lang='en', ...)`
 - `corpus.prepare(handle, ..., semantic='auto')`
-- `corpus.search(handle, query, ..., semantic='auto')`
+- `corpus.search(handle, query, top_k=10, filters=None, ..., semantic='auto')`
 
-The lexical layer preserves exact strings and the optional semantic layer adds FastEmbed/ONNX dense retrieval over the **same frozen timestamped chunks**. Lexical and semantic ranks are fused rather than replacing one with the other.
+The lexical layer preserves exact strings and the optional semantic layer adds FastEmbed/ONNX dense retrieval over the **same frozen timestamped chunks**. Lexical and semantic ranks are fused rather than replacing one with the other, and exact identifiers (part numbers, case numbers, prices, quoted phrases) are ranked as their own signal. Each hit cites the matching segment timestamp and carries its transcript acquisition (captions or local STT), validation status, and transcript/corpus/index revisions; see `CORPUS_SEARCH.md`.
 
 Semantic policy:
 

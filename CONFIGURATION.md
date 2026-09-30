@@ -77,9 +77,43 @@ Cookie-file handling follows yt-dlp's requirements; cookie files should not be c
 
 The same yt-dlp proxy/cookie configuration is reused by `audio.get`, channel-snapshot fallback when page markup yields no videos, and the audio-download stage of local STT. This keeps caption fallback, source discovery, and local transcription on one credential/routing surface.
 
-## Local whisper.cpp STT
+## Local STT backends
 
-Local STT is disabled by default. Configure a local whisper.cpp model to opt in:
+Local speech-to-text is the third acquisition step, used only when both caption providers fail and never when yt-dlp reports that channel membership is required. It is disabled until a local model is configured. Two backends share one adapter interface and one provenance schema (`youtube-mcp.local-stt/1`):
+
+| backend | platform | configure | install |
+|---|---|---|---|
+| `mlx-whisper` | macOS on Apple Silicon | `YOUTUBE_MCP_MLX_WHISPER_MODEL=/path/to/mlx-model-dir` | `pip install 'youtube-mcp-v2[stt-mlx]'` (pulls in torch; heavy) |
+| `whisper.cpp` | portable | `YOUTUBE_MCP_WHISPER_CPP_MODEL=/path/to/ggml-model.bin` | `whisper-cli` binary on `PATH` |
+
+Backend selection:
+
+```text
+YOUTUBE_MCP_STT_BACKEND=auto   # default: mlx-whisper when configured and runnable, else whisper.cpp
+YOUTUBE_MCP_STT_BACKEND=mlx-whisper | whisper.cpp | off
+```
+
+`auto` never fails just because MLX is unavailable on this machine if whisper.cpp is configured; an explicitly selected backend that cannot run produces a structured `local_stt_unavailable` attempt.
+
+Optional language hint shared by both backends (default: automatic detection):
+
+```text
+YOUTUBE_MCP_STT_LANGUAGE=en
+```
+
+### mlx-whisper
+
+`YOUTUBE_MCP_MLX_WHISPER_MODEL` must be an existing local directory with `config.json` and `weights.npz`/`weights.safetensors`/`model.safetensors` — for example a Hugging Face snapshot of `mlx-community/whisper-large-v3-turbo`. A repo id is rejected: models are never downloaded implicitly, and the worker runs with `HF_HUB_OFFLINE=1`. When the directory is a Hub cache snapshot (`models--org--name/snapshots/<commit>`), the repo name and commit are recorded as the model name and revision.
+
+Decoding runs in an isolated worker process with a hard deadline:
+
+```text
+YOUTUBE_MCP_MLX_WHISPER_TIMEOUT_S=3600
+```
+
+### whisper.cpp
+
+Configure a local whisper.cpp model to opt in:
 
 ```text
 YOUTUBE_MCP_WHISPER_CPP_MODEL=/path/to/ggml-model.bin
@@ -105,18 +139,27 @@ Behavior:
 - whisper.cpp runs locally with automatic language detection and JSON timestamp output
 - model downloads are **never** performed implicitly by youtube-mcp-v2
 
-Successful local-STT provenance records only safe reproducibility metadata:
+Successful local-STT provenance (either backend) records only safe reproducibility metadata:
 
 ```text
-engine = whisper.cpp
+schema = youtube-mcp.local-stt/1
+engine = whisper.cpp | mlx-whisper
 engine_version = <compact version when available>
-model.name = <basename only>
+model.name = <basename, or Hub repo id for a snapshot>
+model.revision = <Hub commit when known, else null>
+model.format = ggml | mlx
 model.size_bytes
-model.sha256
+model.sha256        (mlx: digest over per-file digests of config + weights)
+decode.*            (language or "auto", task, temperatures/thresholds, sample_rate)
 audio.sha256
 audio.sample_rate = 16000
 audio.format = wav
+audio.duration_s
+segments.count / first_start_s / last_end_s / speech_s / monotonic
+segments.mean_avg_logprob / max_no_speech_prob (when the engine reports them)
 ```
+
+Validation state is recorded by the normal transcript gate (word rate against video duration, monotonic timestamps, language) and frozen into corpus indexes, so search hits show whether a local-STT revision passed.
 
 The model path, audio path, yt-dlp cookie path, and whisper.cpp subprocess diagnostics containing local paths are not returned to MCP clients. The safe provenance is also persisted with the append-only transcript revision so later cache hits retain the same model/audio identity.
 

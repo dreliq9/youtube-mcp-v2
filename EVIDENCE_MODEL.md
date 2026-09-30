@@ -256,6 +256,8 @@ A `corpus.search` result should identify:
 
 This does not all need to be shown in natural-language UI, but it must be available to an agent or audit workflow.
 
+As of v0.4, transcript `corpus.search` responses carry this as a `retrieval` record (class, index schema, chunker, lexical scorer, model identity, fusion policy, vector-search implementation, filters, top-k) alongside `corpus_revision`, `corpus_manifest_sha256`, and `index_revision`; each hit carries its source transcript revision, `validation_status`, and frozen acquisition provenance.
+
 ## Confidence semantics
 
 Avoid a single `confidence` field unless its meaning is formally defined.
