@@ -1,0 +1,22 @@
+{
+  "_comment": "Minimums for the deterministic synthetic suite (hashing embedder). They guard the retrieval mechanics: exact identifiers survive fusion, paraphrases reach the vector leg, and cited timestamps land inside the gold window. They are not quality targets for a real embedding model.",
+  "modes": {
+    "lexical": {
+      "overall": {"recall@5": 0.9, "temporal_hit@1": 0.9},
+      "product_identifier": {"recall@5": 1.0, "temporal_hit@1": 1.0},
+      "legal_identifier": {"recall@5": 1.0},
+      "quantity_price": {"recall@5": 1.0},
+      "scientific_notation": {"recall@5": 1.0},
+      "error_code": {"recall@5": 1.0}
+    },
+    "hybrid": {
+      "overall": {"recall@5": 0.99, "recall@10": 0.99, "reciprocal_rank": 0.9, "temporal_hit@1": 0.9},
+      "product_identifier": {"recall@5": 1.0, "temporal_hit@1": 1.0},
+      "legal_identifier": {"recall@5": 1.0},
+      "quantity_price": {"recall@5": 1.0},
+      "scientific_notation": {"recall@5": 1.0},
+      "error_code": {"recall@5": 1.0},
+      "concept_paraphrase": {"recall@5": 1.0}
+    }
+  }
+}
