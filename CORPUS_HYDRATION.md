@@ -5,7 +5,7 @@
 The intended research workflow is:
 
 ```text
-skeleton.build(...)
+corpus.build(...)
       ↓
 corpus.hydrate(...)  # repeat with next_cursor until complete
       ↓

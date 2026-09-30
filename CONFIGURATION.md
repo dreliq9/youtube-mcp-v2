@@ -120,6 +120,14 @@ audio.format = wav
 
 The model path, audio path, yt-dlp cookie path, and whisper.cpp subprocess diagnostics containing local paths are not returned to MCP clients. The safe provenance is also persisted with the append-only transcript revision so later cache hits retain the same model/audio identity.
 
+## Legacy skeleton tools
+
+```dotenv
+YOUTUBE_MCP_LEGACY_SKELETON_TOOLS=1
+```
+
+v0.3 replaces the `skeleton.*` tools with `corpus.build/get/list/index/diff`. By default the six `skeleton.*` tools are not registered, keeping the public surface lean. Set this to `1`/`true`/`yes`/`on` to re-register them as compatibility aliases for existing agent prompts. Historical skeleton handles and files are readable through the `corpus.*` tools regardless of this setting.
+
 ## Secret-handling contract
 
 - Proxy URLs, usernames, passwords, cookie paths/selectors, cookies, and API keys must never be returned in MCP tool results.

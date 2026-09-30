@@ -40,12 +40,12 @@ Engineering examples are useful stress tests, but engineering has no privileged 
 
 | Tier | Prefix | Auth | Cost |
 |---|---|---|---|
-| 1 | `inspect.*`, `transcript.*`, `frame.*`, `audio.*`, `media.*`, `scrape.*`, `skeleton.*`, `corpus.*` | none | free/local compute plus explicit media acquisition |
+| 1 | `inspect.*`, `transcript.*`, `frame.*`, `audio.*`, `media.*`, `scrape.*`, `corpus.*` | none | free/local compute plus explicit media acquisition |
 | 2 | `api.*` | `YOUTUBE_API_KEY` | YouTube quota |
 
-One documented exception: `skeleton.build(target='channel')` upgrades to Data API enumeration when an API key is present. Without an API key it first parses the channel page, then falls back to yt-dlp enumeration if YouTube's page markup yields no videos. Provenance reports which path ran.
+One documented exception: `corpus.build(target='channel'|'playlist')` upgrades to Data API enumeration when an API key is present. Without an API key, channels parse the channel page and fall back to yt-dlp enumeration if YouTube's page markup yields no videos; playlists enumerate through yt-dlp. The revision's acquisition manifest records every attempted path.
 
-## Tools (21)
+## Tools (21 by default; 27 with legacy `skeleton.*` aliases)
 
 ### Pre-flight
 
@@ -59,16 +59,26 @@ One documented exception: `skeleton.build(target='channel')` upgrades to Data AP
 - `api.trending(...)`
 - `api.video_categories(...)`
 
-### Frozen source sets
+### Frozen corpus revisions
 
-- `skeleton.build(target='channel'|'topic', value, limit=50)` — freeze one channel/topic snapshot. Channel capture reports `scrape`, `yt-dlp`, or `api` provenance.
-- `skeleton.list(handle)`
-- `skeleton.get(handle)`
-- `skeleton.diff(base_handle, head_handle)` — deterministic add/remove/change comparison between frozen revisions of the same scope.
-- `skeleton.index(target=None)`
-- `skeleton.expire(handle)`
+- `corpus.build(target='channel'|'playlist'|'topic'|'videos', value=None, videos=None, limit=50, fetch_metadata=True)` — capture a new immutable revision. Playlists and explicit video sets need no API key.
+- `corpus.get(handle)` — header, versioned acquisition manifest, integrity check, lifecycle, and prepared index revisions.
+- `corpus.list(handle, cursor=None, page_size=100, enrich=False)` — cursor-paginated frozen membership; `enrich=true` adds the current cache view *beside* the frozen records.
+- `corpus.index(target=None, cursor=None, page_size=50)` — newest-first revision discovery with a stable keyset cursor.
+- `corpus.diff(head_handle, base_handle=None, ignore_volatile=True, max_items=200)` — separately reports added, removed, metadata-changed, transcript/evidence-revision-changed, and provenance-changed members. `base_handle` defaults to the head's previous revision.
 
-Historical `skeleton.*` handles are valid corpus revision identifiers.
+Rebuilding a scope always creates a new handle linked to the previous one; old revision files are never rewritten. Historical `skeleton.*` handles are readable everywhere as legacy corpus revisions. See `CORPUS_REVISIONS.md`.
+
+The v0.2 `skeleton.*` tools are hidden by default to keep the tool surface lean; set `YOUTUBE_MCP_LEGACY_SKELETON_TOOLS=1` to re-register them as compatibility aliases:
+
+| v0.2 tool | v0.3 replacement |
+|---|---|
+| `skeleton.build(target, value, limit)` | `corpus.build(target, value, limit=limit)` (same storage; `skeleton.build` still accepts channel/topic only) |
+| `skeleton.list(handle, enrich=True)` | `corpus.list(handle, enrich=True)` (paginated; enrichment no longer merged into records) |
+| `skeleton.get(handle)` | `corpus.get(handle)` + `corpus.list(handle)` |
+| `skeleton.diff(base, head)` | `corpus.diff(head, base_handle=base)` |
+| `skeleton.index(target)` | `corpus.index(target)` |
+| `skeleton.expire(handle)` | legacy flag only; writes a lifecycle sidecar for v0.3 revisions |
 
 ### Heterogeneous corpus composition
 
@@ -125,9 +135,9 @@ See `EDITOR_HANDOFF.md` for the exact contract and example Declip/FCP-MCP mappin
 ## Example cross-domain research workflow
 
 ```text
-history = skeleton.build("topic", "productive failure in history")
-biology = skeleton.build("topic", "failure adaptation biology")
-coaching = skeleton.build("topic", "learning from mistakes coaching")
+history = corpus.build("topic", "productive failure in history")
+biology = corpus.build("topic", "failure adaptation biology")
+coaching = corpus.build("playlist", "https://www.youtube.com/playlist?list=<coaching playlist>")
 
 mixed = corpus.compose(
   label="productive failure across domains",
@@ -181,8 +191,8 @@ Acquisition/search tools add provenance where known. Errors are structured rathe
 Storage is XDG-aware: `$XDG_CACHE_HOME/youtube-mcp` when a valid absolute XDG cache path is configured, otherwise `~/.cache/youtube-mcp`.
 
 - transcript/video metadata observations are append-only,
-- channel/topic/collection snapshots live under `skeletons/`,
-- `chan-*`, `topic-*`, and `set-*` handles remain independently queryable,
+- corpus revisions (channel/playlist/topic/video-set/collection) live under `skeletons/` for backward compatibility; expiration state for v0.3 revisions lives in `skeletons/_lifecycle/`,
+- `chan-*`, `plist-*`, `topic-*`, `vids-*`, and `set-*` handles remain independently queryable,
 - corpus search indexes are content-addressed immutable SQLite artifacts,
 - visual evidence is frozen by SHA-256 before indexing,
 - clip plans live under `edit-plans/`,

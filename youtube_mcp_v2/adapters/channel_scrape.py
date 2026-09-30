@@ -103,8 +103,8 @@ def _walk_video_renderers(data: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
-def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
-    """Enumerate recent channel uploads through yt-dlp's stable playlist view."""
+def _ytdlp_flat_entries(url: str, limit: int, *, label: str) -> list[dict[str, Any]]:
+    """Run `yt-dlp --flat-playlist` and return its JSON entries (no media I/O)."""
     settings = ytdlp_transcript.settings_from_env()
     cmd = [
         YT_DLP,
@@ -113,7 +113,7 @@ def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
         str(limit),
         "--print-json",
         *ytdlp_transcript._auth_network_args(settings),
-        _resolve_url(value),
+        url,
     ]
     try:
         completed = subprocess.run(
@@ -124,9 +124,9 @@ def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("yt-dlp executable not found for channel fallback") from exc
+        raise RuntimeError(f"yt-dlp executable not found for {label}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(f"yt-dlp exceeded {YT_DLP_TIMEOUT_S}s for channel fallback") from exc
+        raise TimeoutError(f"yt-dlp exceeded {YT_DLP_TIMEOUT_S}s for {label}") from exc
 
     if completed.returncode != 0:
         diagnostic = ytdlp_transcript._redact(
@@ -135,22 +135,54 @@ def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
         if len(diagnostic) > 500:
             diagnostic = diagnostic[:500] + "…"
         raise RuntimeError(
-            f"yt-dlp channel fallback failed (rc={completed.returncode})"
+            f"yt-dlp {label} failed (rc={completed.returncode})"
             + (f": {diagnostic}" if diagnostic else "")
         )
 
-    videos: list[dict[str, Any]] = []
-    channel: dict[str, str] = {"id": "", "handle": "", "title": "", "url": _resolve_url(value)}
+    entries: list[dict[str, Any]] = []
     for line in completed.stdout.splitlines():
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(entry, dict):
-            continue
-        video_id = entry.get("id")
-        if not isinstance(video_id, str) or not video_id:
-            continue
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]:
+            entries.append(entry)
+    return entries
+
+
+def shape_flat_entry(entry: dict[str, Any], *, include_channel: bool = False) -> dict[str, Any]:
+    """Map one yt-dlp flat-playlist entry to the frozen membership schema."""
+    video_id = entry["id"]
+    thumbnails = entry.get("thumbnails")
+    thumbnail_url = ""
+    if isinstance(thumbnails, list) and thumbnails:
+        last = thumbnails[-1]
+        if isinstance(last, dict):
+            thumbnail_url = str(last.get("url") or "")
+    video: dict[str, Any] = {
+        "id": video_id,
+        "title": str(entry.get("title") or ""),
+        "duration_s": entry.get("duration") if isinstance(entry.get("duration"), int) else None,
+        "duration_text": str(entry.get("duration_string") or ""),
+        "published": str(entry.get("upload_date") or ""),
+        "view_count": entry.get("view_count") if isinstance(entry.get("view_count"), int) else "",
+        "thumbnail_url": thumbnail_url or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        "has_transcript": None,
+        "caption_track_id": None,
+        "lang": None,
+    }
+    if include_channel:
+        video["channel"] = str(entry.get("channel") or entry.get("uploader") or "")
+        video["channel_id"] = str(entry.get("channel_id") or "")
+    return video
+
+
+def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
+    """Enumerate recent channel uploads through yt-dlp's stable playlist view."""
+    entries = _ytdlp_flat_entries(_resolve_url(value), limit, label="channel fallback")
+    videos: list[dict[str, Any]] = []
+    channel: dict[str, str] = {"id": "", "handle": "", "title": "", "url": _resolve_url(value)}
+    for entry in entries:
         if not channel["id"]:
             channel = {
                 "id": str(entry.get("playlist_channel_id") or ""),
@@ -158,29 +190,33 @@ def _fetch_channel_uploads_with_ytdlp(value: str, limit: int) -> dict[str, Any]:
                 "title": str(entry.get("playlist_channel") or entry.get("playlist_uploader") or ""),
                 "url": str(entry.get("playlist_webpage_url") or _resolve_url(value)),
             }
-        thumbnails = entry.get("thumbnails")
-        thumbnail_url = ""
-        if isinstance(thumbnails, list) and thumbnails:
-            last = thumbnails[-1]
-            if isinstance(last, dict):
-                thumbnail_url = str(last.get("url") or "")
-        videos.append(
-            {
-                "id": video_id,
-                "title": str(entry.get("title") or ""),
-                "duration_s": entry.get("duration") if isinstance(entry.get("duration"), int) else None,
-                "duration_text": str(entry.get("duration_string") or ""),
-                "published": str(entry.get("upload_date") or ""),
-                "view_count": entry.get("view_count") if isinstance(entry.get("view_count"), int) else "",
-                "thumbnail_url": thumbnail_url or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                "has_transcript": None,
-                "caption_track_id": None,
-                "lang": None,
-            }
-        )
+        videos.append(shape_flat_entry(entry))
     if not videos:
         raise RuntimeError("yt-dlp channel fallback returned no video entries")
     return {"channel": channel, "videos": videos, "source": "yt-dlp"}
+
+
+def fetch_playlist_items(playlist_id: str, limit: int = 50) -> dict[str, Any]:
+    """Enumerate a public playlist in order via yt-dlp. No API key needed.
+
+    Pure-data return so subprocess transport is JSON-clean.
+    """
+    url = f"https://www.youtube.com/playlist?list={playlist_id}"
+    entries = _ytdlp_flat_entries(url, limit, label="playlist enumeration")
+    playlist: dict[str, Any] = {"id": playlist_id, "title": "", "channel": "", "channel_id": "", "url": url}
+    if entries:
+        first = entries[0]
+        playlist.update(
+            title=str(first.get("playlist_title") or first.get("playlist") or ""),
+            channel=str(first.get("playlist_channel") or first.get("playlist_uploader") or ""),
+            channel_id=str(first.get("playlist_channel_id") or ""),
+            item_count=first.get("playlist_count") if isinstance(first.get("playlist_count"), int) else None,
+        )
+    return {
+        "playlist": playlist,
+        "videos": [shape_flat_entry(e, include_channel=True) for e in entries[:limit]],
+        "source": "yt-dlp",
+    }
 
 
 def fetch_channel_uploads(value: str, limit: int = 30) -> dict[str, Any]:

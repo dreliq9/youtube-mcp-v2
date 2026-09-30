@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +26,13 @@ from .tools.skeleton_tools import (
     skeleton_index as _skeleton_index,
 )
 from .tools.corpus_compose import corpus_compose as _corpus_compose
+from .tools.corpus_revisions import (
+    corpus_build as _corpus_build,
+    corpus_get as _corpus_get,
+    corpus_list as _corpus_list,
+    corpus_index_tool as _corpus_index,
+    corpus_diff as _corpus_diff,
+)
 from .tools.corpus import (
     corpus_hydrate as _corpus_hydrate,
     corpus_prepare as _corpus_prepare,
@@ -101,58 +109,142 @@ def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — frozen skeletons
+# Tier 1 — immutable corpus revisions
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="skeleton.build")
-def tool_skeleton_build(
-    target: Literal["channel", "topic"],
-    value: str,
+@mcp.tool(name="corpus.build")
+def tool_corpus_build(
+    target: Literal["channel", "playlist", "topic", "videos"],
+    value: str | None = None,
+    videos: list[str] | None = None,
     limit: int = 50,
+    fetch_metadata: bool = True,
 ) -> dict[str, Any]:
-    """Build a frozen reference of videos for a channel or topic.
+    """Capture a new immutable corpus revision of a channel, playlist, topic, or video set.
 
-    For a deliberately mixed research set, use corpus.compose.
+    USE WHEN: you need a frozen, auditable research set. Rebuilding the same scope
+              always creates a new handle linked to the previous revision; old
+              handles never change. Playlists (via yt-dlp) and explicit video sets
+              (via watch pages) need no API key.
+    DO NOT USE WHEN: mixing existing corpora or avoiding network — use corpus.compose.
+    OUTPUT SHAPE: envelope wrapping handle, count, previous_handle, membership and
+                  manifest hashes; provenance.acquisition lists provider attempts.
     """
-    return _skeleton_build(target, value, limit)
+    return _corpus_build(
+        target, value=value, videos=videos, limit=limit, fetch_metadata=fetch_metadata
+    )
 
 
-@mcp.tool(name="skeleton.list")
-def tool_skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
-    """List the videos in a frozen skeleton/corpus revision."""
-    return _skeleton_list(handle, enrich=enrich)
+@mcp.tool(name="corpus.get")
+def tool_corpus_get(handle: str) -> dict[str, Any]:
+    """Load a corpus revision's header, acquisition manifest, integrity check, and index revisions.
 
-
-@mcp.tool(name="skeleton.get")
-def tool_skeleton_get(handle: str) -> dict[str, Any]:
-    """Load the full frozen snapshot and its capture/composition provenance."""
-    return _skeleton_get(handle)
-
-
-@mcp.tool(name="skeleton.diff")
-def tool_skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:
-    """Compare two frozen revisions of the same channel or topic.
-
-    USE WHEN: you captured the same research scope at two points in time and need
-              an auditable list of videos added, removed, or metadata-changed.
-    DO NOT USE WHEN: the handles represent different channels/topics.
-    OUTPUT SHAPE: envelope wrapping revision metadata, counts, added[], removed[],
-                  changed[], and whether the acquisition source changed.
+    Works for historical skeleton handles too (reported as legacy, with a derived
+    manifest). Membership is paged by corpus.list.
     """
-    return _skeleton_diff(base_handle, head_handle)
+    return _corpus_get(handle)
 
 
-@mcp.tool(name="skeleton.expire")
-def tool_skeleton_expire(handle: str) -> dict[str, Any]:
-    """Mark a frozen snapshot stale without deleting its membership."""
-    return _skeleton_expire(handle)
+@mcp.tool(name="corpus.list")
+def tool_corpus_list(
+    handle: str,
+    cursor: str | None = None,
+    page_size: int = 100,
+    enrich: bool = False,
+) -> dict[str, Any]:
+    """Page through the frozen membership of one corpus revision.
+
+    Each item pairs the captured record with its capture entry (metadata hash,
+    capture-time transcript revisions). enrich=true adds the *current* cached view
+    in a separate `enrichment` block; frozen records are never altered. Continue
+    with next_cursor.
+    """
+    return _corpus_list(handle, cursor=cursor, page_size=page_size, enrich=enrich)
 
 
-@mcp.tool(name="skeleton.index")
-def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
-    """Discover frozen channel/topic/collection snapshots on disk."""
-    return _skeleton_index(target)
+@mcp.tool(name="corpus.index")
+def tool_corpus_index(
+    target: Literal["channel", "playlist", "topic", "videos", "collection"] | None = None,
+    cursor: str | None = None,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Discover corpus revisions (newest first), including legacy skeleton snapshots."""
+    return _corpus_index(target=target, cursor=cursor, page_size=page_size)
+
+
+@mcp.tool(name="corpus.diff")
+def tool_corpus_diff(
+    head_handle: str,
+    base_handle: str | None = None,
+    ignore_volatile: bool = True,
+    max_items: int = 200,
+) -> dict[str, Any]:
+    """Diff two frozen corpus revisions using only what each captured.
+
+    USE WHEN: you rebuilt a scope (base defaults to the head's previous revision)
+              or derived one corpus from another and need an auditable change list.
+    OUTPUT SHAPE: envelope wrapping counts plus separate added[], removed[],
+                  metadata_changed[], transcript_changed, and provenance_changed.
+                  View counts and relative publish text are ignored by default.
+    """
+    return _corpus_diff(
+        head_handle,
+        base_handle=base_handle,
+        ignore_volatile=ignore_volatile,
+        max_items=max_items,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy skeleton.* tools (opt-in compatibility aliases)
+# ---------------------------------------------------------------------------
+
+
+def legacy_skeleton_tools_enabled() -> bool:
+    return os.environ.get("YOUTUBE_MCP_LEGACY_SKELETON_TOOLS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+if legacy_skeleton_tools_enabled():
+
+    @mcp.tool(name="skeleton.build")
+    def tool_skeleton_build(
+        target: Literal["channel", "topic"],
+        value: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Deprecated alias of corpus.build(target='channel'|'topic')."""
+        return _skeleton_build(target, value, limit)
+
+    @mcp.tool(name="skeleton.list")
+    def tool_skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
+        """Deprecated: unpaged membership with v0.2 in-place enrichment. Prefer corpus.list."""
+        return _skeleton_list(handle, enrich=enrich)
+
+    @mcp.tool(name="skeleton.get")
+    def tool_skeleton_get(handle: str) -> dict[str, Any]:
+        """Deprecated: full raw snapshot file. Prefer corpus.get + corpus.list."""
+        return _skeleton_get(handle)
+
+    @mcp.tool(name="skeleton.diff")
+    def tool_skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:
+        """Deprecated: v0.2 same-scope diff. Prefer corpus.diff."""
+        return _skeleton_diff(base_handle, head_handle)
+
+    @mcp.tool(name="skeleton.expire")
+    def tool_skeleton_expire(handle: str) -> dict[str, Any]:
+        """Mark a frozen snapshot stale without deleting or rewriting its membership."""
+        return _skeleton_expire(handle)
+
+    @mcp.tool(name="skeleton.index")
+    def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
+        """Deprecated: unpaged revision summaries. Prefer corpus.index."""
+        return _skeleton_index(target)
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +607,9 @@ def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
 
 log.info(
     "youtube-mcp-v2 ready — tier-1: inspect.video, transcript.get, scrape.search, "
-    "skeleton.{build,list,get,diff,expire,index}, "
-    "corpus.{compose,hydrate,prepare,search,visual_search,clip_plan}, "
+    "corpus.{build,get,list,index,diff,compose,hydrate,prepare,search,visual_search,clip_plan}, "
     "frame.get, audio.get, media.materialize | tier-2: "
-    "api.{search,channel_stats,trending,video_categories} | binary media resources registered"
+    "api.{search,channel_stats,trending,video_categories} | legacy skeleton.* aliases: %s "
+    "| binary media resources registered",
+    "on" if legacy_skeleton_tools_enabled() else "off (YOUTUBE_MCP_LEGACY_SKELETON_TOOLS=1)",
 )
