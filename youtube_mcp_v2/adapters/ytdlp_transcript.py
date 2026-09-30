@@ -6,9 +6,13 @@ that subtitle track to a temporary directory, parses it, and removes the tempora
 files before returning.
 
 Optional routing/auth environment variables:
-    YOUTUBE_YTDLP_PROXY=<proxy URL>
+    YOUTUBE_YTDLP_PROXY=<proxy URL>        (falls back to YOUTUBE_MCP_PROXY)
     YOUTUBE_COOKIES_FILE=<Netscape cookies.txt path>
     YOUTUBE_COOKIES_FROM_BROWSER=<yt-dlp browser selector>
+
+The acquisition waterfall calls this adapter twice at most: once anonymously
+(`cookies=False`) and, only when cookies are configured and the anonymous path
+was blocked or needs a session, once as the cookie-authenticated stage.
 
 Credential-bearing values are never included in returned summaries or error text.
 """
@@ -45,6 +49,14 @@ class YtDlpNoTranscript(YtDlpTranscriptError):
     """yt-dlp found the video but no usable subtitle track."""
 
 
+class YtDlpMalformedPayload(YtDlpTranscriptError):
+    """yt-dlp returned metadata/subtitle data that could not be parsed."""
+
+
+class YtDlpConfigError(YtDlpTranscriptError):
+    """yt-dlp routing/auth configuration is conflicting (value-free message)."""
+
+
 @dataclass(frozen=True)
 class YtDlpSettings:
     proxy: str | None
@@ -73,7 +85,25 @@ def _env(name: str) -> str | None:
     return value or None
 
 
-def settings_from_env() -> YtDlpSettings:
+def proxy_from_env() -> str | None:
+    """yt-dlp proxy: the yt-dlp-specific route wins over the shared route."""
+    return _env("YOUTUBE_YTDLP_PROXY") or _env("YOUTUBE_MCP_PROXY")
+
+
+def cookies_configured() -> bool:
+    """Whether any cookie mode is configured. Never returns the value itself."""
+    return bool(_env("YOUTUBE_COOKIES_FILE") or _env("YOUTUBE_COOKIES_FROM_BROWSER"))
+
+
+def settings_from_env(*, cookies: bool = True) -> YtDlpSettings:
+    """Resolve yt-dlp routing/auth settings.
+
+    `cookies=False` returns proxy-only settings for the anonymous caption stage;
+    cookie values are not even read in that mode.
+    """
+    proxy = proxy_from_env()
+    if not cookies:
+        return YtDlpSettings(proxy=proxy, cookies_file=None, cookies_from_browser=None)
     cookies_file = _env("YOUTUBE_COOKIES_FILE")
     cookies_from_browser = _env("YOUTUBE_COOKIES_FROM_BROWSER")
     if cookies_file and cookies_from_browser:
@@ -82,7 +112,7 @@ def settings_from_env() -> YtDlpSettings:
             "YOUTUBE_COOKIES_FROM_BROWSER, not both"
         )
     return YtDlpSettings(
-        proxy=_env("YOUTUBE_YTDLP_PROXY"),
+        proxy=proxy,
         cookies_file=cookies_file,
         cookies_from_browser=cookies_from_browser,
     )
@@ -160,9 +190,9 @@ def _dump_info(video_id: str, settings: YtDlpSettings) -> dict[str, Any]:
     try:
         payload = json.loads(cp.stdout)
     except json.JSONDecodeError as exc:
-        raise YtDlpTranscriptError("yt-dlp returned invalid metadata JSON") from exc
+        raise YtDlpMalformedPayload("yt-dlp returned invalid metadata JSON") from exc
     if not isinstance(payload, dict):
-        raise YtDlpTranscriptError("yt-dlp metadata payload was not an object")
+        raise YtDlpMalformedPayload("yt-dlp metadata payload was not an object")
     return payload
 
 
@@ -267,7 +297,7 @@ def _parse_json3(path: Path) -> list[Segment]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise YtDlpTranscriptError("could not parse yt-dlp JSON3 subtitles") from exc
+        raise YtDlpMalformedPayload("could not parse yt-dlp JSON3 subtitles") from exc
 
     events = payload.get("events", []) if isinstance(payload, dict) else []
     segments: list[Segment] = []
@@ -357,9 +387,21 @@ def _normalize_segments(segments: list[Segment]) -> list[Segment]:
     return out
 
 
-def fetch_transcript(video_id: str, lang: str = "en") -> TranscriptFetch:
-    """Fetch a caption track through yt-dlp using a requested→English→any policy."""
-    settings = settings_from_env()
+def fetch_transcript(
+    video_id: str,
+    lang: str = "en",
+    *,
+    cookies: bool = True,
+) -> TranscriptFetch:
+    """Fetch a caption track through yt-dlp using a requested→English→any policy.
+
+    `cookies=False` forces an anonymous request even when cookies are configured.
+    """
+    try:
+        settings = settings_from_env(cookies=cookies)
+    except ValueError as exc:
+        # The message names environment variables only, never their values.
+        raise YtDlpConfigError(str(exc)) from exc
     info = _dump_info(video_id, settings)
     selected_lang, generated = _select_track(info, lang)
 

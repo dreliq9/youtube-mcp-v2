@@ -7,6 +7,7 @@ mode='chunked' → token-budgeted chunks with overlap (for very long videos)
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any, Literal
 
@@ -169,12 +170,45 @@ def _cache_provenance(row: dict[str, Any]) -> dict[str, Any] | None:
     acquisition: dict[str, Any] = {
         "provider": provider,
         "method": method,
+        "provider_class": transcript_acquisition.provider_class(provider),
         "attempts": attempts,
     }
     details = _safe_json_object(details_raw)
     if details is not None:
         acquisition["details"] = details
-    return {"acquisition": acquisition}
+    return {
+        "acquisition": acquisition,
+        # Identify which append-only revision answered, so the original
+        # acquisition above can be tied to a concrete cached artifact.
+        "cache": {"hit": True, "revision_fetched_at": row.get("fetched_at")},
+    }
+
+
+class _MalformedCacheRow(ValueError):
+    """A cached transcript revision cannot be decoded into segments."""
+
+
+def _decode_cached_row(row: dict[str, Any]) -> tuple[list[dict], list[str]]:
+    """Validate a cached revision before trusting it as a cache hit.
+
+    A corrupt row must never crash `transcript.get`; it is treated as a miss so
+    the live waterfall can produce a fresh revision.
+    """
+    try:
+        segs = json.loads(row["segments_json"]) if row.get("segments_json") else []
+        warnings = json.loads(row["warnings_json"]) if row.get("warnings_json") else []
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise _MalformedCacheRow("cached transcript JSON is not decodable") from exc
+    if not isinstance(segs, list) or not isinstance(warnings, list):
+        raise _MalformedCacheRow("cached transcript has unexpected JSON shape")
+    for seg in segs:
+        if (
+            not isinstance(seg, dict)
+            or not isinstance(seg.get("text"), str)
+            or not isinstance(seg.get("start_s"), (int, float))
+        ):
+            raise _MalformedCacheRow("cached transcript segment is malformed")
+    return segs, [str(w) for w in warnings]
 
 
 def _failure_envelope(
@@ -234,9 +268,11 @@ def transcript_get(
 ) -> dict[str, Any]:
     """Fetch a YouTube transcript in one of three shapes.
 
-    Live acquisition is provider-independent: caption providers are tried first;
-    an explicitly configured local whisper.cpp model is the final fallback.
-    Provenance records every attempted provider and local model/audio identity.
+    Live acquisition is provider-independent: a fresh, structurally valid cached
+    revision is used first; then native captions, yt-dlp captions, an optional
+    cookie-authenticated yt-dlp pass, and finally an explicitly configured local
+    whisper.cpp model. Provenance records every attempted provider (with stable
+    detail codes) and, on cache hits, the original acquisition of the revision.
     """
     try:
         video_id = parse_video_id(url_or_id)
@@ -261,11 +297,26 @@ def transcript_get(
                 recoverable=False,
             )
 
+    # Stage 0 of the waterfall: a fresh, structurally valid cached revision.
+    cache_attempts: list[transcript_acquisition.AcquisitionAttempt] = []
     cache_hit = cache.get_transcript(video_id, lang)
+    decoded: tuple[list[dict], list[str]] | None = None
     if cache_hit is not None:
+        try:
+            decoded = _decode_cached_row(cache_hit[0])
+        except _MalformedCacheRow:
+            cache_attempts.append(
+                transcript_acquisition.AcquisitionAttempt(
+                    provider="cache",
+                    method="transcript_revision",
+                    duration_ms=0,
+                    outcome="error",
+                    detail_code="cache_malformed",
+                )
+            )
+    if cache_hit is not None and decoded is not None:
         row, age = cache_hit
-        segs = json.loads(row["segments_json"]) if row.get("segments_json") else []
-        warnings = json.loads(row["warnings_json"]) if row.get("warnings_json") else []
+        segs, warnings = decoded
         validated = bool(row["validated"])
         actual_lang = row.get("actual_lang") or lang
         raw_generated = row.get("is_generated")
@@ -293,7 +344,13 @@ def transcript_get(
     try:
         acquired = transcript_acquisition.acquire_transcript(video_id, lang=lang)
     except transcript_acquisition.TranscriptAcquisitionFailed as exc:
+        if cache_attempts:
+            exc.attempts = [*cache_attempts, *exc.attempts]
         return _failure_envelope(video_id, lang, exc)
+    if cache_attempts:
+        acquired = dataclasses.replace(
+            acquired, attempts=[*cache_attempts, *acquired.attempts]
+        )
 
     fetch = acquired.fetch
     segments = [
@@ -316,10 +373,15 @@ def transcript_get(
         actual_lang=fetch.lang,
     )
     if acquired.provider != "youtube-transcript-api":
+        label = acquired.provider
+        if acquired.method == "captions_authenticated":
+            label = f"{acquired.provider} (cookie-authenticated)"
         warnings = [
             *warnings,
-            f"transcript fallback used: {acquired.provider}",
+            f"transcript fallback used: {label}",
         ]
+    if cache_attempts:
+        warnings = [*warnings, "discarded malformed cached transcript revision"]
 
     attempts = [attempt.as_dict() for attempt in acquired.attempts]
     cache.put_transcript(

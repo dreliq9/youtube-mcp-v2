@@ -174,6 +174,8 @@ Tools use a common top-level success/failure shape:
 
 Acquisition/search tools add provenance where known. Errors are structured rather than crashing the MCP process.
 
+`transcript.get` walks an internal acquisition waterfall (cache → native captions → yt-dlp captions → optional cookie-authenticated yt-dlp → opt-in local STT) with bounded retries and a per-provider circuit breaker. Every attempt is reported in `provenance.acquisition.attempts` with a stable `detail_code`, and cache hits return the original acquisition history. See `CONFIGURATION.md`.
+
 `corpus.hydrate` and `corpus.search` prevent corpus size from becoming model-context size: hydration returns status/provenance, while retrieval returns only leading timestamped evidence chunks.
 
 ## Cache and reproducibility

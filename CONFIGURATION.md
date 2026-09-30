@@ -12,13 +12,56 @@ Enables `api.*` tools and tier-2 channel enumeration.
 
 ## Transcript acquisition waterfall
 
-A live transcript request uses independent providers in this order:
+`transcript.get` never asks the caller to choose a provider. A request walks these stages in order and stops at the first success:
 
-1. `youtube-transcript-api` captions
-2. yt-dlp caption extraction
-3. local whisper.cpp speech-to-text, **only when a local model path is explicitly configured**
+| # | Stage (`provider` / `method`) | Runs when |
+|---|---|---|
+| 0 | cache / `transcript_revision` | a fresh (30-day TTL), structurally decodable cached revision exists — no upstream work at all |
+| 1 | `youtube-transcript-api` / `captions` | always (native caption HTTP path) |
+| 2 | `yt-dlp` / `captions` | stage 1 failed; runs **anonymously** (cookies are never sent here) |
+| 3 | `yt-dlp` / `captions_authenticated` | cookies are configured **and** stage 2 was blocked, rate limited, circuit-open, or reported a sign-in/membership requirement |
+| 4 | `whisper.cpp` / `local_stt` | a local model path is explicitly configured and no stage reported `membership_required` |
 
-The returned provenance records each provider attempt and the provider that ultimately produced the cached artifact. Credential values and local model/audio filesystem paths are never part of that provenance.
+The returned `provenance.acquisition` records `provider`, `method`, `provider_class` (`scrape` or `local`) and an ordered `attempts` list. Each attempt has only machine-safe fields:
+
+```json
+{"provider": "yt-dlp", "method": "captions", "duration_ms": 812,
+ "outcome": "success", "detail_code": null, "retry": 0}
+```
+
+`outcome` is one of `success`, `unavailable`, `blocked`, `timeout`, `error`, `skipped`. Stable `detail_code` values include:
+
+- `transcripts_disabled`, `no_transcript`, `video_unavailable`, `video_unplayable`, `login_required`, `membership_required`, `missing_dependency` (unavailable)
+- `request_blocked`, `rate_limited` (HTTP 429), `po_token_required` (blocked)
+- `timeout`, `local_stt_timeout` (timeout)
+- `malformed_payload`, `network_error`, `proxy_error`, `config_error`, `provider_error`, `local_stt_failed`, `cache_malformed` (error)
+- `circuit_open` (skipped — see below)
+
+The attempt history is persisted with the append-only cache revision, so a later cache hit returns the **original** acquisition provenance plus `provenance.cache = {"hit": true, "revision_fetched_at": ...}`. A corrupt cached row is never trusted: it is recorded as a `cache_malformed` attempt and the live waterfall produces a new revision.
+
+Credential values, exception text, and local model/audio filesystem paths are never part of provenance or acquisition logs.
+
+### Timeouts, retries, and circuit breaker
+
+```text
+YOUTUBE_TRANSCRIPT_TIMEOUT_S=20          # per-HTTP-request timeout for stage 1 (0 < n <= 300)
+YOUTUBE_MCP_ACQUISITION_RETRIES=1        # extra tries per stage for timeout/network_error (0–3)
+YOUTUBE_MCP_ACQUISITION_BACKOFF_S=0.5    # exponential backoff base between retries (0–10)
+YOUTUBE_MCP_BREAKER_THRESHOLD=3          # consecutive blocked/rate-limited outcomes that open a stage's breaker
+YOUTUBE_MCP_BREAKER_COOLDOWN_S=300       # how long an open breaker skips the stage before one half-open trial
+```
+
+- Only transient failures (`timeout`, `network_error`) are retried; each retry is a separate attempt with an incrementing `retry` index. Blocks, rate limits, malformed payloads, and "no captions" answers are never retried on the same stage. Local STT is never retried.
+- yt-dlp subprocesses keep their existing hard deadlines (60s metadata, 90s subtitle download).
+- Each stage (`provider:method`) has an in-process circuit breaker. After the threshold of consecutive `blocked` outcomes, the stage is skipped (`outcome: "skipped"`, `detail_code: "circuit_open"`) until the cooldown elapses; then one trial request is allowed. Success or a non-block answer closes the breaker; another block re-opens it. Breaker state is per server process and resets on restart.
+
+## Shared proxy routing
+
+```text
+YOUTUBE_MCP_PROXY=socks5://user:password@proxy.example:1080
+```
+
+One HTTP/HTTPS/SOCKS URL used as the default route for every acquisition path: the native caption HTTP client (stage 1) and all yt-dlp invocations (caption stages, `audio.get`, channel fallback, local-STT audio download, `media.materialize`). A provider-specific setting (below) always wins over the shared route. SOCKS URLs on the native HTTP path require PySocks (`pip install "requests[socks]"`); without it the attempt fails with `detail_code: "config_error"` and the waterfall continues. yt-dlp supports SOCKS natively.
 
 ## Primary transcript proxy routing
 
@@ -59,7 +102,7 @@ The independent yt-dlp caption provider has its own optional network/auth settin
 YOUTUBE_YTDLP_PROXY=socks5://user:password@proxy.example:1080
 ```
 
-For videos that require an authenticated YouTube session, configure **one** of:
+For videos that require an authenticated YouTube session, configure **one** of the following. Cookies are used only by the dedicated cookie-authenticated caption stage (stage 3 above), never by the anonymous yt-dlp caption stage:
 
 ```text
 YOUTUBE_COOKIES_FILE=/path/to/cookies.txt

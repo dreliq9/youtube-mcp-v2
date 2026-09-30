@@ -101,7 +101,7 @@ def _run(cmd: list[str], *, timeout_s: int, label: str) -> subprocess.CompletedP
 
 def _yt_dlp_auth_args() -> list[str]:
     args: list[str] = []
-    proxy = os.environ.get("YOUTUBE_YTDLP_PROXY")
+    proxy = os.environ.get("YOUTUBE_YTDLP_PROXY") or os.environ.get("YOUTUBE_MCP_PROXY")
     cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE")
     cookies_browser = os.environ.get("YOUTUBE_COOKIES_FROM_BROWSER")
     if proxy:
