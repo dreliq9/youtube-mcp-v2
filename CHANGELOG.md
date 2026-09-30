@@ -26,6 +26,15 @@
 - New skeleton files use exclusive creation, so a handle collision can never silently overwrite an earlier frozen snapshot.
 - `skeleton.expire` remains the one documented in-place metadata mutation and does not alter captured membership.
 
+### Benchmark
+- Added the YouTube-MCP Bench 0.2 harness (`python bench/run.py --check-thresholds`).
+  - Adds protocol/install (stdio), metadata, transcript provenance and temporal-evidence, long-context, and fault-tolerance cases.
+  - Scripted upstream failure fixtures use synthetic data, and deterministic cases run with secret-canary and network guards.
+  - Scoring is per suite, with regression thresholds.
+  - Reports are written as JSON, Markdown, and CSV, with run metadata.
+  - Includes a `jkawamoto/mcp-youtube-transcript` competitor adapter and a manual/scheduled live manifest.
+- Revision 0.1 cases are unchanged.
+
 ### Documentation
 - Updated YouTube `search.list` quota documentation for the June 2026 granular quota model.
 - Added `ROADMAP.md` for the acquisition → corpus → semantic → multimodal → distribution sequence.
