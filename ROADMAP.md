@@ -183,6 +183,8 @@ Goal: remove installation friction without weakening local-first capabilities.
 - storage/cache health diagnostics,
 - doctor/config checks for optional ML/media backends.
 
+Status (issue #7): packaging metadata, `doctor` / `config check` / `cache status`, Dockerfile, `server.json`, install docs, and Streamable HTTP with bearer auth, per-token rate limits, body bounds, and remote path withholding are implemented. Actual PyPI/GHCR/Registry publishing and signed releases wait on the release workflow in `ci/release.yml` being activated (see `RELEASING.md`).
+
 ---
 
 ## v0.7 — Compound research workflows

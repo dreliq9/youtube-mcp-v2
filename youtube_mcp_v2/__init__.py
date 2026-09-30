@@ -1,3 +1,3 @@
-"""youtube-mcp v0.2.1 — disciplined YouTube research MCP."""
+"""youtube-mcp-v2 — disciplined, evidence-grade YouTube research MCP server."""
 
 __version__ = "0.2.1"

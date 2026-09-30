@@ -58,6 +58,7 @@ def audio_get(
             "resource_mime_type": None,
             "resource_size_bytes": None,
             "resource_portable": False,
+            "resource_sha256": None,
         }
         warnings.append(f"audio resource reference unavailable: {exc}")
 

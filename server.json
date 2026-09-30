@@ -1,0 +1,80 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dreliq9/youtube-mcp-v2",
+  "title": "YouTube MCP v2",
+  "description": "Evidence-grade YouTube research: transcripts, frozen corpora, timestamped search, frames, audio.",
+  "websiteUrl": "https://github.com/dreliq9/youtube-mcp-v2/blob/main/INSTALL.md",
+  "repository": {
+    "url": "https://github.com/dreliq9/youtube-mcp-v2",
+    "source": "github"
+  },
+  "version": "0.2.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "youtube-mcp-v2",
+      "version": "0.2.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "YOUTUBE_API_KEY",
+          "description": "Optional YouTube Data API v3 key for tier-2 api.* tools and full channel/playlist enumeration",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "YOUTUBE_TRANSCRIPT_PROXY",
+          "description": "Optional HTTP/HTTPS/SOCKS proxy URL for transcript requests",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "YOUTUBE_COOKIES_FILE",
+          "description": "Optional Netscape cookies.txt for yt-dlp fallback/media paths",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "filepath"
+        },
+        {
+          "name": "XDG_CACHE_HOME",
+          "description": "Optional absolute cache base directory (default ~/.cache)",
+          "isRequired": false,
+          "format": "filepath"
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/dreliq9/youtube-mcp-v2:0.2.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--volume",
+          "description": "Persist the evidence cache between runs",
+          "value": "youtube-mcp-cache:/data"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "YOUTUBE_API_KEY",
+          "description": "Optional YouTube Data API v3 key",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

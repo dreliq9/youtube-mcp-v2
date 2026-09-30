@@ -8,6 +8,7 @@ accidentally pull an arbitrarily large full-length audio file into one response.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ class ArtifactReference:
     size_bytes: int
     portable: bool
     kind: Literal["frame", "audio"]
+    sha256: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -56,6 +58,8 @@ class ArtifactReference:
             "resource_mime_type": self.mime_type,
             "resource_size_bytes": self.size_bytes,
             "resource_portable": self.portable,
+            # Lets a remote client verify the bytes it reads via resource_uri.
+            "resource_sha256": self.sha256,
         }
 
 
@@ -138,12 +142,20 @@ def reference_for_path(
 
     limit = max_resource_bytes()
     portable = size <= limit
+    digest = None
+    if portable:
+        sha = hashlib.sha256()
+        with artifact_path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                sha.update(block)
+        digest = sha.hexdigest()
     return ArtifactReference(
         uri=_resource_uri(kind, ext, video_id, name) if portable else None,
         mime_type=mime_type,
         size_bytes=size,
         portable=portable,
         kind=kind,
+        sha256=digest,
     )
 
 

@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
@@ -56,7 +57,7 @@ def _python_check() -> Check:
     )
 
 
-def _package_check(distribution: str, *, required: bool = True) -> Check:
+def _package_check(distribution: str, *, required: bool = True, extra: str | None = None) -> Check:
     version = _distribution_version(distribution)
     if version is not None:
         return Check(
@@ -65,22 +66,69 @@ def _package_check(distribution: str, *, required: bool = True) -> Check:
             f"{distribution} {version} installed",
             {"version": version},
         )
-    status = "fail" if required else "warn"
+    if not required:
+        # Optional extras are capabilities, not failures.
+        return Check(
+            f"package:{distribution}",
+            "info",
+            f"{distribution} not installed" + (f" (optional `{extra}` extra)" if extra else ""),
+        )
     return Check(
         f"package:{distribution}",
-        status,
+        "fail",
         f"{distribution} is not installed",
     )
+
+
+def _backend_checks() -> list[Check]:
+    """Configured provider / ML backends, presence and validity only."""
+    from . import config_check
+
+    return [
+        config_check.check_transcript_proxy(),
+        config_check.check_ytdlp_network(),
+        config_check.check_whisper(),
+        config_check.check_embeddings(),
+    ]
+
+
+def _disk_check(cache_dir: Path = CACHE_DIR) -> Check:
+    probe = cache_dir if cache_dir.exists() else next((p for p in cache_dir.parents if p.exists()), None)
+    if probe is None:
+        return Check("disk", "warn", "cache volume not found")
+    usage = shutil.disk_usage(probe)
+    detail = {"free_bytes": usage.free, "total_bytes": usage.total}
+    if usage.free < 1024 * 1024 * 1024:
+        return Check("disk", "warn", "less than 1 GiB free on the cache volume (see `youtube-mcp-v2 cache status`)", detail)
+    return Check("disk", "pass", f"{usage.free // (1024 * 1024)} MiB free on the cache volume", detail)
+
+
+def _binary_version(path: str, flag: str) -> str | None:
+    """First line of `<binary> <flag>`; local exec only, never network."""
+    try:
+        completed = subprocess.run(
+            [path, flag], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    first = (completed.stdout or completed.stderr or "").strip().splitlines()
+    if completed.returncode != 0 or not first:
+        return None
+    return first[0].split(" Copyright")[0].strip()[:120]
+
+
+_VERSION_FLAGS = {"yt-dlp": "--version", "ffmpeg": "-version", "ffprobe": "-version"}
 
 
 def _binary_check(name: str, *, required: bool, capability: str) -> Check:
     path = shutil.which(name)
     if path:
+        version = _binary_version(path, _VERSION_FLAGS.get(name, "--version"))
         return Check(
             f"binary:{name}",
             "pass",
-            f"{name} available for {capability}",
-            {"path": path},
+            f"{name} available for {capability}" + (f" ({version})" if version else ""),
+            {"path": path, "version": version},
         )
     return Check(
         f"binary:{name}",
@@ -132,6 +180,7 @@ def _api_key_check() -> Check:
 def _server_import_check() -> Check:
     try:
         from mcp.server import MCPServer
+
         from .server import mcp
 
         valid = isinstance(mcp, MCPServer)
@@ -152,26 +201,34 @@ def run_doctor() -> dict[str, Any]:
 
     Missing ffmpeg/ffprobe/yt-dlp are warnings here because core metadata and
     transcript/search features can still work without every media capability in
-    the v0.2.1 line. Required Python/packages/server/cache failures make the
+    the v0.2.x line. Required Python/packages/server/cache failures make the
     overall status fail.
     """
     checks = [
         _python_check(),
         _package_check("mcp"),
         _package_check("youtube-transcript-api"),
+        _package_check("yt-dlp"),
         _package_check("httpx"),
         _package_check("beautifulsoup4"),
+        _package_check("python-dotenv"),
+        _package_check("fastembed", required=False, extra="semantic"),
+        _package_check("google-api-python-client", required=False, extra="api"),
         _binary_check("yt-dlp", required=False, capability="frame/audio acquisition"),
         _binary_check("ffmpeg", required=False, capability="frame/audio conversion"),
         _binary_check("ffprobe", required=False, capability="frame duration probing"),
         _cache_check(),
+        _disk_check(),
         _api_key_check(),
+        *_backend_checks(),
         _server_import_check(),
     ]
 
     required_failures = [check for check in checks if check.status == "fail"]
     warnings = [check for check in checks if check.status == "warn"]
-    return {
+    from .redaction import redact
+
+    return redact({
         "youtube_mcp_version": __version__,
         "status": "fail" if required_failures else "ok",
         "platform": platform.platform(),
@@ -181,7 +238,7 @@ def run_doctor() -> dict[str, Any]:
             "warnings": len(warnings),
         },
         "checks": [check.as_dict() for check in checks],
-    }
+    })
 
 
 def render_text(report: dict[str, Any]) -> str:

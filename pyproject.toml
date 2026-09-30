@@ -1,10 +1,28 @@
 [project]
 name = "youtube-mcp-v2"
-version = "0.2.1"
+dynamic = ["version"]
 description = "Evidence-grade, domain-neutral research over knowledge encoded in YouTube video"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Adam Steen", email = "dreliq9@gmail.com" }]
+keywords = ["mcp", "model-context-protocol", "youtube", "transcripts", "research", "evidence", "llm", "agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "mcp>=2.0,<3",
     "python-dotenv>=1.0,<2",
@@ -24,14 +42,27 @@ semantic = ["fastembed>=0.8,<0.9"]
 frame = ["yt-dlp>=2026.7.4,<2027"]
 audio = ["yt-dlp>=2026.7.4,<2027"]
 media = ["yt-dlp>=2026.7.4,<2027"]
+all = ["youtube-mcp-v2[api,semantic]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Build/release verification only (not needed at runtime).
+release = ["build>=1.2", "twine>=6.1"]
+
+[project.urls]
+Homepage = "https://github.com/dreliq9/youtube-mcp-v2"
+Repository = "https://github.com/dreliq9/youtube-mcp-v2"
+Issues = "https://github.com/dreliq9/youtube-mcp-v2/issues"
+Changelog = "https://github.com/dreliq9/youtube-mcp-v2/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/dreliq9/youtube-mcp-v2/blob/main/INSTALL.md"
 
 [project.scripts]
 youtube-mcp-v2 = "youtube_mcp_v2.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "youtube_mcp_v2.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["youtube_mcp_v2*"]
