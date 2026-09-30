@@ -1,13 +1,17 @@
-"""skeleton.* — frozen reference objects for multi-step research.
+"""skeleton.* — legacy compatibility wrappers over corpus revisions.
 
 Once built, a skeleton is read-only. Re-running build creates a new handle. Old
-handles remain queryable forever (revision discipline). Future corpus/ML tools
-attach enrichment alongside existing videoIds without modifying the snapshot.
+handles remain queryable forever (revision discipline).
+
+Since v0.3 the canonical tools are `corpus.build/get/list/index/diff`
+(`tools/corpus_revisions.py`). `skeleton.build` now writes the same immutable,
+manifest-bearing corpus revision and keeps its v0.2 response shape; the
+`skeleton.*` MCP tools are only registered when
+YOUTUBE_MCP_LEGACY_SKELETON_TOOLS=1.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any, Literal
 
 from .. import envelope, isolation, skeleton as _skeleton
@@ -17,25 +21,13 @@ def _build_channel(value: str, limit: int) -> tuple[dict[str, Any], str]:
     """Channel skeleton builder. Returns (raw_data, source).
 
     Auto-upgrades to tier-2 Data API v3 (full enumeration) when YOUTUBE_API_KEY
-    is set; otherwise scrapes the /videos tab. The on-disk skeleton's `source`
-    field reflects which path ran so future comparisons preserve provenance.
+    is set; otherwise scrapes the /videos tab (falling back to yt-dlp). The
+    revision's `source` and manifest attempts reflect which path ran.
     """
-    if os.environ.get("YOUTUBE_API_KEY"):
-        from ..adapters import data_api
-        try:
-            raw = data_api.channel_uploads(value, limit=limit)
-            return raw, "api"
-        except (data_api.ApiAuthError, data_api.ApiQuotaError, data_api.ApiCallError):
-            # Auto-upgrade is best-effort; fall back to the no-key path.
-            pass
+    from .corpus_revisions import acquire_channel
 
-    raw = isolation.run_isolated(
-        "youtube_mcp_v2.adapters.channel_scrape.fetch_channel_uploads",
-        value,
-        limit,
-        timeout_s=25,
-    )
-    return raw, raw.get("source", "scrape")
+    raw, source, _attempts = acquire_channel(value, limit)
+    return raw, source
 
 
 def _build_topic(value: str, limit: int) -> dict[str, Any]:
@@ -74,6 +66,8 @@ def skeleton_build(
     limit: int = 50,
 ) -> dict[str, Any]:
     """Build a frozen reference of videos for a channel or topic."""
+    from .corpus_revisions import build_revision
+
     if target not in ("channel", "topic"):
         return envelope.fail(
             "bad_target",
@@ -83,50 +77,19 @@ def skeleton_build(
     if not value or not value.strip():
         return envelope.fail("bad_value", "value is empty", recoverable=False)
 
-    limit = max(1, min(int(limit), 200))
-
-    try:
-        if target == "channel":
-            raw, source = _build_channel(value.strip(), limit)
-        else:
-            raw = _build_topic(value.strip(), limit)
-            source = "scrape"
-    except TimeoutError as e:
-        return envelope.fail("skeleton_build_timeout", str(e))
-    except RuntimeError as e:
-        return envelope.fail("skeleton_build_failed", str(e))
-
-    handle = _skeleton.make_handle(target, value)
-    payload = {
-        "handle": handle,
-        "target": target,
-        "value": value,
-        "built_at": _skeleton._now_iso(),
-        "source": source,
-        "expired_at": None,
-        "channel": raw.get("channel"),
-        "videos": raw.get("videos", []),
-    }
-    try:
-        _skeleton.save_skeleton(payload)
-    except FileExistsError:
-        # This should be extraordinarily rare with microsecond handles, but the
-        # storage layer intentionally refuses to violate frozen-snapshot history.
-        return envelope.fail(
-            "skeleton_handle_collision",
-            f"refusing to overwrite existing skeleton handle {handle}",
-            recoverable=True,
-        )
-
+    payload, warnings, failure = build_revision(target, value, limit=limit)
+    if failure is not None:
+        return failure
     return envelope.ok(
         {
-            "handle": handle,
+            "handle": payload["handle"],
             "target": target,
-            "value": value,
-            "source": source,
+            "value": payload["value"],
+            "source": payload["source"],
             "count": len(payload["videos"]),
         },
-        source=source,
+        source=payload["source"],
+        warnings=warnings,
     )
 
 
@@ -153,7 +116,7 @@ def skeleton_get(handle: str) -> dict[str, Any]:
         return envelope.fail("skeleton_not_found", str(e), recoverable=False)
     except ValueError as e:
         return envelope.fail("bad_handle", str(e), recoverable=False)
-    return envelope.ok(data, source="cache")
+    return envelope.ok({**data, "expired_at": _skeleton.expired_at(handle, data)}, source="cache")
 
 
 def skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:

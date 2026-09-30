@@ -63,7 +63,7 @@ def api_channel_stats(channel_id_or_handle: str) -> dict[str, Any]:
     USE WHEN: you need creator-size signals (sub count, view total) or canonical
               channel metadata (custom URL, country, created_at).
     DO NOT USE WHEN: you only need a list of recent uploads — call
-                     skeleton.build(target='channel') instead.
+                     corpus.build(target='channel') instead.
     OUTPUT SHAPE: envelope wrapping {id, title, description_excerpt,
                   subscriber_count, view_count, video_count, created_at,
                   country, custom_url}.

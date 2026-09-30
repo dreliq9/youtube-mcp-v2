@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import cache, envelope, skeleton
+from .. import cache, corpus_revision, envelope, skeleton
 from ..adapters.url import parse_video_id
 
 MAX_EXPLICIT_VIDEOS = 500
@@ -188,29 +188,31 @@ def corpus_compose(
             recoverable=False,
         )
 
-    handle = skeleton.make_handle("collection", label)
-    payload = {
-        "handle": handle,
-        "target": "collection",
-        "value": label,
-        "built_at": skeleton._now_iso(),
-        "source": "compose",
-        "expired_at": None,
-        "channel": None,
-        "parent_handle": base_handle,
-        "included_handles": include_handles,
-        "composition": {
-            "source_handles": source_handles,
-            "explicit_video_ids": explicit_ids,
-            "added_video_ids": added_ids,
-            "removed_video_ids": removed_ids,
-            "duplicate_video_ids_ignored": list(
-                dict.fromkeys([*duplicate_inputs, *duplicate_removals, *duplicate_membership])
-            ),
-        },
-        "videos": membership,
+    composition = {
+        "source_handles": source_handles,
+        "explicit_video_ids": explicit_ids,
+        "added_video_ids": added_ids,
+        "removed_video_ids": removed_ids,
+        "duplicate_video_ids_ignored": list(
+            dict.fromkeys([*duplicate_inputs, *duplicate_removals, *duplicate_membership])
+        ),
     }
-    skeleton.save_skeleton(payload)
+    payload = corpus_revision.create_revision(
+        target="collection",
+        value=label,
+        videos=membership,
+        source="compose",
+        origin={"canonical_url": None, "source_handles": source_handles},
+        attempts=[],
+        extra={
+            "channel": None,
+            "parent_handle": base_handle,
+            "included_handles": include_handles,
+            "composition": composition,
+        },
+        previous_handle=base_handle,
+    )
+    handle = payload["handle"]
 
     warnings: list[str] = []
     unknown_removals = [video_id for video_id in remove_ids if video_id not in removed_ids]
