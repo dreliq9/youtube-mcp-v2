@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — v0.3 acquisition waterfall (#2)
+
+### Acquisition
+- Transcript acquisition is now an explicit provider waterfall built on a small `TranscriptProvider` interface: fresh validated cache → native captions → anonymous yt-dlp captions → optional cookie-authenticated yt-dlp captions → opt-in local whisper.cpp STT.
+- Cookies are sent only by the new cookie-authenticated stage, and only after the anonymous yt-dlp stage was blocked/rate limited or needed a signed-in/member session.
+- Bounded retries (default 1, max 3) with exponential backoff for timeouts/network errors; blocks and rate limits are never retried on the same stage.
+- Per-stage in-process circuit breaker skips a stage after repeated block/rate-limit outcomes (`detail_code: "circuit_open"`) and half-opens after a cooldown.
+- The native caption HTTP client now always has an explicit per-request timeout (`YOUTUBE_TRANSCRIPT_TIMEOUT_S`, default 20s).
+- New shared `YOUTUBE_MCP_PROXY` route propagates to the native caption HTTP path and every yt-dlp path; provider-specific proxy settings still win.
+
+### Provenance
+- Attempts gain a `retry` index; acquisition gains `provider_class`; cache hits gain `provenance.cache`.
+- New stable detail codes: `rate_limited`, `malformed_payload`, `login_required`, `video_unplayable`, `po_token_required`, `network_error`, `proxy_error`, `config_error`, `circuit_open`, `cache_malformed`.
+- HTTP 429 / "Too Many Requests" responses from unknown exception types and from yt-dlp are now `rate_limited` (previously `request_blocked`); `youtube-transcript-api`'s `RequestBlocked`/`IpBlocked` remain `request_blocked`.
+- A corrupt cached transcript row no longer crashes `transcript.get`; it is recorded as `cache_malformed` and re-acquired.
+
 ## 0.2.1 — unreleased
 
 ### Compatibility

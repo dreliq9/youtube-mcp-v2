@@ -115,6 +115,16 @@ Followed by:
 - `detail_code` should be stable/machine-readable; human text belongs in warnings/error messages.
 - A successful cache hit should still be able to resolve the provenance of the cached artifact's original acquisition.
 
+### Implementation status (v0.3 acquisition)
+
+Implemented for `transcript.get` (see `CONFIGURATION.md` for the full detail-code list):
+
+- `provenance.acquisition.{provider, method, provider_class, attempts[]}` on live results, failures, and cache hits.
+- Attempts carry `provider`, `method`, `duration_ms`, `outcome`, stable `detail_code`, and a `retry` index.
+- Cache hits return the persisted original acquisition plus `provenance.cache.revision_fetched_at`.
+
+Not yet implemented: per-attempt `started_at`, `source_identity`, `language`, `transcript`, and `revision` blocks.
+
 ## Validation model
 
 Boolean `validated` is too coarse to explain partial validation. Keep it for compatibility, but record checks.
