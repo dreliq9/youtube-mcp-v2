@@ -1,9 +1,13 @@
 """Skeleton handles — frozen reference objects for multi-step research.
 
 A skeleton is a read-only snapshot of a research set at a point in time. It may
-come from one channel, one topic search, or an explicitly composed heterogeneous
-collection. Re-building or re-composing creates a new handle; old handles remain
-queryable forever (revision discipline).
+come from one channel, one playlist, one topic search, an explicit video set, or
+an explicitly composed heterogeneous collection. Re-building or re-composing
+creates a new handle; old handles remain queryable forever (revision discipline).
+
+This module is the storage layer for corpus revisions (`corpus_revision.py`).
+Historical skeleton files are read as legacy corpus revisions; new revisions add
+a versioned acquisition manifest to the same file format.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ MODEL_DIR = _DEFAULT_MODEL_DIR
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _HANDLE_RE = re.compile(
-    r"^(chan|topic|set)-[A-Za-z0-9_.@-]+-\d{8}-\d{6}(?:-\d{6})?$"
+    r"^(chan|plist|topic|vids|set)-[A-Za-z0-9_.@-]+-\d{8}-\d{6}(?:-\d{6})?$"
 )
 
 
@@ -60,11 +64,17 @@ def _slug(value: str, max_len: int = 40) -> str:
 
 
 def make_handle(
-    target: Literal["channel", "topic", "collection"], value: str
+    target: Literal["channel", "playlist", "topic", "videos", "collection"], value: str
 ) -> str:
     if target == "channel":
         prefix = "chan"
         body = value.strip()
+    elif target == "playlist":
+        prefix = "plist"
+        body = value.strip()
+    elif target == "videos":
+        prefix = "vids"
+        body = _slug(value.strip())
     elif target == "topic":
         prefix = "topic"
         body = _slug(value.strip())
@@ -104,6 +114,34 @@ def load_skeleton(handle: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def lifecycle_path(handle: str) -> Path:
+    """Sidecar for mutable lifecycle state of an immutable corpus revision."""
+    if not is_valid_handle(handle):
+        raise ValueError(f"invalid skeleton handle: {handle!r}")
+    return SKELETON_DIR / "_lifecycle" / f"{handle}.json"
+
+
+def _is_immutable_revision(data: dict[str, Any]) -> bool:
+    # Revisions written with a versioned manifest are byte-immutable; their
+    # lifecycle lives in a sidecar. Historical files keep the in-place field.
+    return isinstance(data.get("schema_version"), str) and "manifest" in data
+
+
+def expired_at(handle: str, data: dict[str, Any]) -> str | None:
+    if data.get("expired_at"):
+        return data["expired_at"]
+    try:
+        sidecar = lifecycle_path(handle)
+    except ValueError:
+        return None
+    if not sidecar.is_file():
+        return None
+    try:
+        return json.loads(sidecar.read_text(encoding="utf-8")).get("expired_at")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def list_skeletons(target: str | None = None) -> list[dict[str, Any]]:
     _ensure_dirs()
     summaries: list[dict[str, Any]] = []
@@ -112,15 +150,18 @@ def list_skeletons(target: str | None = None) -> list[dict[str, Any]]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        if not isinstance(data, dict):
+            continue
         if target and data.get("target") != target:
             continue
+        handle = data.get("handle")
         summaries.append(
             {
-                "handle": data.get("handle"),
+                "handle": handle,
                 "target": data.get("target"),
                 "value": data.get("value"),
                 "built_at": data.get("built_at"),
-                "expired_at": data.get("expired_at"),
+                "expired_at": expired_at(handle, data) if isinstance(handle, str) else None,
                 "video_count": len(data.get("videos", [])),
                 "source": data.get("source"),
             }
@@ -129,11 +170,27 @@ def list_skeletons(target: str | None = None) -> list[dict[str, Any]]:
 
 
 def expire_skeleton(handle: str) -> dict[str, Any]:
-    """Mark a skeleton stale; membership remains frozen."""
+    """Mark a skeleton stale; membership remains frozen.
+
+    Historical skeleton files record `expired_at` in place (the one documented
+    v0.2 mutation). Manifest-bearing corpus revisions are never rewritten: the
+    timestamp goes to an exclusive-create lifecycle sidecar instead.
+    """
     data = load_skeleton(handle)
-    if data.get("expired_at"):
-        return data
-    data["expired_at"] = _now_iso()
+    current = expired_at(handle, data)
+    if current:
+        return {**data, "expired_at": current}
+    stamp = _now_iso()
+    if _is_immutable_revision(data):
+        sidecar = lifecycle_path(handle)
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with sidecar.open("x", encoding="utf-8") as file:
+                file.write(json.dumps({"handle": handle, "expired_at": stamp}, indent=2))
+        except FileExistsError:
+            stamp = expired_at(handle, data) or stamp
+        return {**data, "expired_at": stamp}
+    data["expired_at"] = stamp
     skeleton_path(handle).write_text(
         json.dumps(data, indent=2), encoding="utf-8"
     )
