@@ -1,0 +1,6 @@
+include LICENSE README.md CHANGELOG.md INSTALL.md CLI.md CONFIGURATION.md RELEASING.md server.json Dockerfile
+recursive-include tests *.py
+prune bench
+prune docs
+prune ci
+global-exclude *.py[cod] __pycache__ *.sqlite
