@@ -1,5 +1,7 @@
 # youtube-mcp-v2
 
+<!-- mcp-name: io.github.dreliq9/youtube-mcp-v2 -->
+
 A disciplined YouTube MCP for **evidence-grade, domain-neutral video research**.
 
 The product goal is not "more YouTube API wrappers" and it is not an engineering-specific workflow. It is a trustworthy interface to **knowledge that happens to be encoded in video**: discover sources, freeze or compose a research corpus, acquire evidence, retrieve the exact spoken or visual moments needed by a reasoning model, and hand selected moments to downstream tools without turning the research MCP into an editor.
@@ -192,25 +194,48 @@ Skeleton handles include microseconds and are created exclusively, so a collisio
 
 ## Install
 
-Requires Python 3.10+. Media extraction/materialization also requires `ffmpeg` in `PATH`.
+Requires Python 3.10+. Frame/audio extraction and clip materialization also need `ffmpeg`/`ffprobe` on `PATH`. Full per-OS instructions, MCP client configuration, Docker, and remote deployment are in `INSTALL.md`.
+
+Once published to PyPI (see `RELEASING.md`), the zero-install launch is:
 
 ```bash
-pip install git+https://github.com/dreliq9/youtube-mcp-v2.git
+uvx youtube-mcp-v2            # stdio MCP server
+uvx youtube-mcp-v2 doctor     # offline capability check
 ```
 
-Optional extras:
+Until then, install from GitHub:
 
 ```bash
-pip install "youtube-mcp-v2[api,media,semantic] @ git+https://github.com/dreliq9/youtube-mcp-v2.git"
+uv tool install git+https://github.com/dreliq9/youtube-mcp-v2.git
+# or: pip install git+https://github.com/dreliq9/youtube-mcp-v2.git
 ```
+
+Optional extras (`pip install "youtube-mcp-v2[api,semantic]"`, or `[all]`):
 
 - `api` — YouTube Data API adapter,
-- `media` — yt-dlp frame/audio/editor-clip acquisition,
-- `semantic` — FastEmbed/ONNX semantic transcript and paired visual embeddings.
+- `semantic` — FastEmbed/ONNX semantic transcript and paired visual embeddings,
+- `media` / `frame` / `audio` — compatibility aliases; yt-dlp is now a core dependency.
+
+Diagnostics (never print secret values):
+
+```bash
+youtube-mcp-v2 doctor [--json]        # versions, binaries, cache writability, backends
+youtube-mcp-v2 config check [--json]  # validate environment configuration
+youtube-mcp-v2 cache status [--json]  # storage usage, quota, SQLite health
+```
+
+### Remote (Streamable HTTP)
+
+```bash
+YOUTUBE_MCP_HTTP_TOKEN=<long random token> \
+  youtube-mcp-v2 serve --transport streamable-http --host 0.0.0.0 --allowed-host mcp.example.com
+```
+
+Remote mode requires a bearer token off-loopback, rate-limits per token, withholds server-local paths from tool results, and delivers frames/audio/visual evidence as bounded MCP resources (`resource_uri` + `resource_sha256`). Modern 2026-07-28 stateless clients and handshake-era clients (2025-03-26 … 2025-11-25) are both served on `/mcp`. See `INSTALL.md#remote-deployment`.
 
 ## Quality gates
 
-GitHub Actions runs deterministic unit tests on Python 3.10–3.13, package/server import smoke on Linux/macOS/Windows, bytecode compilation, and an optional semantic-extra API smoke without downloading model weights.
+GitHub Actions runs deterministic unit tests on Python 3.10–3.13, package/server import smoke on Linux/macOS/Windows, bytecode compilation, and an optional semantic-extra API smoke without downloading model weights. The release workflow (`ci/release.yml`, see `RELEASING.md`) builds the sdist/wheel, runs `twine check`, and exercises a clean install plus first stdio and Streamable HTTP launch on Linux/macOS/Windows.
 
 Live YouTube tests remain separate so upstream throttling is not mistaken for a deterministic regression.
 

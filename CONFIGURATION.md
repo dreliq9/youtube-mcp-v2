@@ -120,6 +120,37 @@ audio.format = wav
 
 The model path, audio path, yt-dlp cookie path, and whisper.cpp subprocess diagnostics containing local paths are not returned to MCP clients. The safe provenance is also persisted with the append-only transcript revision so later cache hits retain the same model/audio identity.
 
+## Cache location, limits, and quota
+
+```text
+XDG_CACHE_HOME=/absolute/path          # cache root becomes $XDG_CACHE_HOME/youtube-mcp (default ~/.cache/youtube-mcp)
+YOUTUBE_MCP_MAX_RESOURCE_BYTES=33554432         # largest frame/audio artifact served via resources/read (default 32 MiB)
+YOUTUBE_MCP_MAX_VISUAL_RESOURCE_BYTES=16777216  # largest visual-evidence frame resource (default 16 MiB)
+YOUTUBE_MCP_CACHE_QUOTA_BYTES=10737418240       # optional soft quota reported by `cache status` (nothing is evicted)
+```
+
+`youtube-mcp-v2 config check` validates these as positive integers; `youtube-mcp-v2 cache status` reports usage against the quota.
+
+## Remote Streamable HTTP
+
+These apply to `youtube-mcp-v2 serve --transport streamable-http` (see `CLI.md`).
+
+```text
+YOUTUBE_MCP_HTTP_TOKEN=<token>[,<token>...]   # bearer tokens, each >= 16 characters
+YOUTUBE_MCP_HTTP_TOKEN_FILE=/run/secrets/tokens  # one token per line, or sha256:<hex digest>; '#' comments allowed
+YOUTUBE_MCP_HTTP_RATE_LIMIT_PER_MIN=120       # sustained requests per minute per principal
+YOUTUBE_MCP_HTTP_RATE_BURST=30                # token-bucket burst size
+YOUTUBE_MCP_HTTP_MAX_BODY_BYTES=1048576       # largest accepted request body (min 1024)
+YOUTUBE_MCP_HTTP_ALLOWED_HOSTS=mcp.example.com,mcp.example.com:443  # DNS-rebinding allowlist
+```
+
+- Clients send `Authorization: Bearer <token>`. Missing or wrong tokens get `401` with `WWW-Authenticate: Bearer`; tokens are compared as SHA-256 digests in constant time. A token file may hold only digests (`sha256:` + `hashlib.sha256(token).hexdigest()`), so the server host never stores the plaintext.
+- Rate limiting is per token (identified internally by a 12-hex digest prefix, never the token) or per client IP when auth is off; excess requests get `429` with `Retry-After`.
+- A non-loopback bind without any token refuses to start (exit 2) unless `--allow-unauthenticated` is passed for deployments behind an authenticating proxy.
+- `/healthz` is unauthenticated and returns `{"status": "ok"}` only.
+- Serving over HTTP sets `YOUTUBE_MCP_REMOTE=1`, which withholds server-local paths from tool results and skips registering `media.materialize`. Set it manually only if you front the stdio server with your own remote bridge.
+- Startup logs a settings summary (host, port, auth mode, token **count**, limits) — never token values.
+
 ## Secret-handling contract
 
 - Proxy URLs, usernames, passwords, cookie paths/selectors, cookies, and API keys must never be returned in MCP tool results.
@@ -129,4 +160,4 @@ The model path, audio path, yt-dlp cookie path, and whisper.cpp subprocess diagn
 - Safe diagnostics may report only provider names, whether routing is configured, cookie **mode** (`none`, `file`, or `browser`), non-secret location codes, and local engine/model hashes/identities that contain no path.
 - `.env` is gitignored.
 
-Future `doctor`/health commands should follow the same rule: report that a credential or local model is configured, never print the credential/path itself.
+- `doctor`, `config check`, and `cache status` follow the same rule: they report that a credential, proxy, cookie source, or HTTP token is configured (and cookie **mode**), never the value. Their output additionally passes through a redactor that masks every configured secret value (and URL userinfo) wherever it appears, and tool responses and uncaught tool errors pass through the same redactor before reaching any client.

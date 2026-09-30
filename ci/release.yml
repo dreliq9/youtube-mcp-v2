@@ -1,0 +1,213 @@
+# Release workflow for youtube-mcp-v2.
+#
+# NOT ACTIVE: this file must be moved to .github/workflows/release.yml to run
+# (it was authored with a token lacking the `workflow` scope). See ci/README.md.
+#
+# On every pull request / manual dispatch: build sdist+wheel, `twine check`,
+# clean-install + first-launch smoke on Linux/macOS/Windows (pip venv and uvx
+# from the built wheel), and a Docker build + stdio/HTTP smoke. Publishing
+# jobs run only for a pushed `v*` tag whose version matches the package, and
+# each is gated behind a protected GitHub Environment.
+name: release
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - "Dockerfile"
+      - "server.json"
+      - "youtube_mcp_v2/**"
+      - "scripts/smoke_install.py"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip "build>=1.2" "twine>=6.1"
+          python -m build
+          python -m twine check --strict dist/*
+      - id: meta
+        name: Read version; verify tag and registry metadata agree
+        run: |
+          VERSION=$(python -c "import re,pathlib;print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('youtube_mcp_v2/__init__.py').read_text()).group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          python - "$VERSION" <<'PY'
+          import json, sys
+          v = sys.argv[1]
+          doc = json.load(open("server.json"))
+          assert doc["version"] == v, doc["version"]
+          for p in doc["packages"]:
+              assert p.get("version", v) == v or p["identifier"].endswith(":" + v), p
+          PY
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VERSION" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version $VERSION"; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  install-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Clean pip install of the wheel into a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then BIN="$RUNNER_TEMP/clean/Scripts"; EXE=.exe; else BIN="$RUNNER_TEMP/clean/bin"; EXE=; fi
+          echo "CLEAN_BIN=$BIN" >> "$GITHUB_ENV"
+          echo "CLEAN_EXE=$EXE" >> "$GITHUB_ENV"
+          "$BIN/python" -m pip install --upgrade pip
+          "$BIN/python" -m pip install dist/*.whl
+      - name: First launch (installed console script)
+        run: |
+          "$CLEAN_BIN/python$CLEAN_EXE" scripts/smoke_install.py --expect-version "${{ needs.build.outputs.version }}" --command "$CLEAN_BIN/youtube-mcp-v2$CLEAN_EXE"
+      - name: First launch (uvx from the built wheel, empty uv cache)
+        env:
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          "$CLEAN_BIN/python$CLEAN_EXE" scripts/smoke_install.py --expect-version "${{ needs.build.outputs.version }}" \
+            --command uvx --python "${{ matrix.python-version }}" --from "$WHEEL" youtube-mcp-v2
+      - name: sdist builds and installs
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python -m venv "$RUNNER_TEMP/sdist"
+          "$RUNNER_TEMP/sdist/bin/python" -m pip install dist/*.tar.gz
+          "$RUNNER_TEMP/sdist/bin/youtube-mcp-v2" --version
+
+  docker-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build image
+        run: docker build -t youtube-mcp-v2:ci .
+      - name: doctor inside the image
+        run: docker run --rm youtube-mcp-v2:ci doctor
+      - name: stdio + Streamable HTTP smoke against the image
+        run: |
+          python -m pip install "mcp>=2.0,<3"
+          TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+          docker run -d --name ytmcp -p 127.0.0.1:18080:8000 -e YOUTUBE_MCP_HTTP_TOKEN="$TOKEN" youtube-mcp-v2:ci \
+            serve --transport streamable-http --host 0.0.0.0 --allowed-host 127.0.0.1:18080
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:18080/healthz && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18080/mcp)" = 401
+          python - "$TOKEN" <<'PY'
+          import sys, anyio, httpx2
+          from mcp import Client, StdioServerParameters
+          from mcp.client.streamable_http import streamable_http_client
+          async def main():
+              async with Client(StdioServerParameters(command="docker", args=["run", "-i", "--rm", "youtube-mcp-v2:ci"])) as c:
+                  assert len((await c.list_tools()).tools) >= 15
+              async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {sys.argv[1]}"}) as h:
+                  for mode in ("2026-07-28", "legacy"):
+                      async with Client(streamable_http_client("http://127.0.0.1:18080/mcp", http_client=h), mode=mode) as c:
+                          assert len((await c.list_tools()).tools) >= 15
+          anyio.run(main)
+          PY
+          ! docker logs ytmcp 2>&1 | grep -F "$TOKEN"
+          docker rm -f ytmcp
+
+  publish-pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, install-smoke, docker-smoke]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/youtube-mcp-v2/
+    permissions:
+      id-token: write   # PyPI trusted publishing; no API token stored
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-ghcr:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, install-smoke, docker-smoke]
+    runs-on: ubuntu-latest
+    environment: ghcr
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/dreliq9/youtube-mcp-v2:${{ needs.build.outputs.version }}
+            ghcr.io/dreliq9/youtube-mcp-v2:latest
+
+  publish-mcp-registry:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, publish-pypi, publish-ghcr]
+    runs-on: ubuntu-latest
+    environment: mcp-registry-publish
+    permissions:
+      contents: read
+      id-token: write   # mcp-publisher login github-oidc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Wait for PyPI to serve the release (registry verifies the README mcp-name)
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS "https://pypi.org/pypi/youtube-mcp-v2/${{ needs.build.outputs.version }}/json" >/dev/null && exit 0
+            sleep 10
+          done
+          exit 1
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish

@@ -206,6 +206,13 @@ Rules:
 - Every persisted artifact has a content hash.
 - Artifact IDs are immutable references to bytes; regeneration creates a new artifact ID if bytes change.
 
+### Current implementation (v0.6 distribution work)
+
+- `frame.get` / `audio.get` return `resource_uri` (`youtube-mcp://artifact/{frame|audio}/{ext}/{video_id}/{name}`), `resource_mime_type`, `resource_size_bytes`, `resource_portable`, and `resource_sha256`. Visual evidence frames use content-addressed `youtube-mcp://evidence/frame/{ext}/{sha256}` URIs.
+- Clients read the bytes with MCP `resources/read`; reads are bounded (`YOUTUBE_MCP_MAX_RESOURCE_BYTES`, default 32 MiB; `YOUTUBE_MCP_MAX_VISUAL_RESOURCE_BYTES`, default 16 MiB), reject path traversal, and fail with explicit resource errors that contain no server paths.
+- `local_path` is realised as the tool's existing `path`-style fields. In local stdio mode they are unchanged. In remote (Streamable HTTP) mode every path-like field is withheld and path strings under server-local roots are replaced, so a remote client receives only resource URIs and hashes.
+- Gap relative to the target model: frame/audio URIs are name-addressed, not immutable `art_…` IDs. Re-extraction with identical parameters can replace the bytes behind the same URI; `resource_sha256` lets a client detect that. Content-addressed artifact IDs remain future work.
+
 ## Revision identity
 
 Suggested stored objects:

@@ -2,6 +2,14 @@
 
 ## 0.2.1 — unreleased
 
+### Distribution and remote operation (issue #7)
+- PyPI-ready packaging: version single-sourced from `youtube_mcp_v2.__version__`, SPDX license metadata, classifiers, project URLs, `[all]` and `[release]` extras, and `MANIFEST.in`. `python -m build` + `twine check --strict` pass; `uvx --from <wheel> youtube-mcp-v2` is verified.
+- CLI: `--version`, `serve --transport stdio|streamable-http`, an extended `doctor` (package versions, binary versions, disk space, configured proxy/cookie/STT/embedding backends), `config check`, and `cache status`. All output is secret-redacted.
+- Streamable HTTP transport with bearer-token auth (plaintext or `sha256:` token files), per-principal token-bucket rate limiting, a request-body bound, DNS-rebinding host allowlist, and `/healthz`. It serves both 2026-07-28 stateless clients and handshake-era (2025-03-26 … 2025-11-25) clients.
+- Remote mode withholds server-local paths from tool results, delivers artifacts only via bounded MCP resources (with a new `resource_sha256` field), and does not register `media.materialize`.
+- Every tool response and uncaught tool error now passes through a configured-secret redactor, in local mode too. Resource read failures surface as explicit MCP resource errors.
+- Added a `Dockerfile` (non-root, ffmpeg included, `/data` volume), MCP Registry `server.json`, `INSTALL.md` (Linux/macOS/Windows, clients, Docker, remote), `RELEASING.md` (release checklist and migration notes), `scripts/smoke_install.py`, and a staged release workflow at `ci/release.yml`.
+
 ### Compatibility
 - Migrated the server to the MCP Python SDK v2 high-level `MCPServer` API.
 - Bounded the `mcp` dependency to the v2 major line.
