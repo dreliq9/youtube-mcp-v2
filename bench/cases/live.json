@@ -1,0 +1,431 @@
+{
+  "benchmark_version": "0.2-live",
+  "adapter": "youtube_mcp_v2",
+  "description": "Opt-in live-network cases (python bench/run.py --mode live). Only public video IDs, expected metadata annotations, and human-verified evidence windows are stored; no video or transcript payloads. Never run in PR CI.",
+  "revision_notes": "Annotations verified against live YouTube on 2026-09-29. Upstream titles and captions can change; failures here are reported, not gated. The live set is small and not yet domain-balanced.",
+  "cases": [
+    {
+      "id": "live-protocol-launch-and-list",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "live",
+      "input": {},
+      "expected": {
+        "launched": true,
+        "documented_tools_present": true,
+        "schemas": {
+          "all_object": true
+        },
+        "unknown_tool": {
+          "survived": true
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ],
+      "notes": "Cold launch with the adapter's default install command (may include a network install)."
+    },
+    {
+      "id": "live-protocol-invalid-url-structured",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "live",
+      "input": {},
+      "expected": {
+        "invalid_input": {
+          "handled": true,
+          "machine_code": {
+            "$present": true
+          }
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ]
+    },
+    {
+      "id": "live-meta-zoo",
+      "suite": "metadata",
+      "task": "live_metadata",
+      "mode": "live",
+      "input": {
+        "video_id": "jNQXAC9IVRw"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Me at the zoo",
+        "channel": "jawed",
+        "duration_s": {
+          "$approx": 19,
+          "$tol": 1
+        },
+        "has_transcript": true,
+        "available_caption_langs": {
+          "$contains": [
+            "en"
+          ]
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "video_id": "jNQXAC9IVRw",
+      "domain_strata": [
+        "personal-vlog"
+      ],
+      "media_strata": [
+        "short",
+        "manual-captions",
+        "multilingual"
+      ]
+    },
+    {
+      "id": "live-meta-rick",
+      "suite": "metadata",
+      "task": "live_metadata",
+      "mode": "live",
+      "input": {
+        "video_id": "dQw4w9WgXcQ"
+      },
+      "expected": {
+        "ok": true,
+        "title": {
+          "$contains": "Never Gonna Give You Up"
+        },
+        "channel": "Rick Astley",
+        "duration_s": {
+          "$approx": 213,
+          "$tol": 2
+        },
+        "has_transcript": true
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "video_id": "dQw4w9WgXcQ",
+      "domain_strata": [
+        "music"
+      ],
+      "media_strata": [
+        "music-video"
+      ]
+    },
+    {
+      "id": "live-meta-ted-creativity",
+      "suite": "metadata",
+      "task": "live_metadata",
+      "mode": "live",
+      "input": {
+        "video_id": "iG9CE55wbtY"
+      },
+      "expected": {
+        "ok": true,
+        "title": {
+          "$contains": "Do schools kill creativity"
+        },
+        "channel": "TED",
+        "duration_s": {
+          "$approx": 1203,
+          "$tol": 3
+        },
+        "has_transcript": true
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "video_id": "iG9CE55wbtY",
+      "domain_strata": [
+        "education"
+      ],
+      "media_strata": [
+        "talk",
+        "medium"
+      ]
+    },
+    {
+      "id": "live-meta-3b1b-neural",
+      "suite": "metadata",
+      "task": "live_metadata",
+      "mode": "live",
+      "input": {
+        "video_id": "aircAruvnKk"
+      },
+      "expected": {
+        "ok": true,
+        "title": {
+          "$contains": "neural network"
+        },
+        "channel": "3Blue1Brown",
+        "duration_s": {
+          "$approx": 1120,
+          "$tol": 3
+        },
+        "has_transcript": true
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "video_id": "aircAruvnKk",
+      "domain_strata": [
+        "science"
+      ],
+      "media_strata": [
+        "lecture",
+        "animation",
+        "medium"
+      ]
+    },
+    {
+      "id": "live-transcript-provenance-zoo",
+      "suite": "transcript",
+      "task": "live_transcript",
+      "mode": "live",
+      "input": {
+        "video_id": "jNQXAC9IVRw",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true,
+        "segment_count": {
+          "$gte": 1
+        }
+      },
+      "scoring": {
+        "method": "provenance",
+        "params": {
+          "min_completeness": 0.8
+        }
+      },
+      "video_id": "jNQXAC9IVRw",
+      "domain_strata": [
+        "personal-vlog"
+      ],
+      "media_strata": [
+        "short",
+        "manual-captions",
+        "multilingual"
+      ]
+    },
+    {
+      "id": "live-transcript-provenance-ted-creativity",
+      "suite": "transcript",
+      "task": "live_transcript",
+      "mode": "live",
+      "input": {
+        "video_id": "iG9CE55wbtY",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true,
+        "segment_count": {
+          "$gte": 1
+        }
+      },
+      "scoring": {
+        "method": "provenance",
+        "params": {
+          "min_completeness": 0.8
+        }
+      },
+      "video_id": "iG9CE55wbtY",
+      "domain_strata": [
+        "education"
+      ],
+      "media_strata": [
+        "talk",
+        "medium"
+      ]
+    },
+    {
+      "id": "live-evidence-zoo-elephants",
+      "suite": "transcript",
+      "task": "live_evidence",
+      "mode": "live",
+      "input": {
+        "video_id": "jNQXAC9IVRw",
+        "query": "elephants",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              1.2,
+              3.36
+            ]
+          ],
+          "tolerance_s": 3.0,
+          "k": 1
+        }
+      },
+      "video_id": "jNQXAC9IVRw",
+      "domain_strata": [
+        "personal-vlog"
+      ],
+      "media_strata": [
+        "short",
+        "manual-captions",
+        "multilingual"
+      ]
+    },
+    {
+      "id": "live-evidence-zoo-trunks",
+      "suite": "transcript",
+      "task": "live_evidence",
+      "mode": "live",
+      "input": {
+        "video_id": "jNQXAC9IVRw",
+        "query": "trunks",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              7.974,
+              12.616
+            ]
+          ],
+          "tolerance_s": 3.0,
+          "k": 1
+        }
+      },
+      "video_id": "jNQXAC9IVRw",
+      "domain_strata": [
+        "personal-vlog"
+      ],
+      "media_strata": [
+        "short",
+        "manual-captions",
+        "multilingual"
+      ]
+    },
+    {
+      "id": "live-evidence-rick-never-gonna-give",
+      "suite": "transcript",
+      "task": "live_evidence",
+      "mode": "live",
+      "input": {
+        "video_id": "dQw4w9WgXcQ",
+        "query": "never gonna give you up",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              40.52,
+              42.92
+            ],
+            [
+              82.4,
+              85.24
+            ],
+            [
+              98.08,
+              102.04
+            ]
+          ],
+          "tolerance_s": 3.0,
+          "k": 1
+        }
+      },
+      "video_id": "dQw4w9WgXcQ",
+      "domain_strata": [
+        "music"
+      ],
+      "media_strata": [
+        "music-video"
+      ]
+    },
+    {
+      "id": "live-evidence-ted-creativity-as-important-in",
+      "suite": "transcript",
+      "task": "live_evidence",
+      "mode": "live",
+      "input": {
+        "video_id": "iG9CE55wbtY",
+        "query": "as important in education as literacy",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              193.0,
+              194.87
+            ]
+          ],
+          "tolerance_s": 3.0,
+          "k": 1
+        }
+      },
+      "video_id": "iG9CE55wbtY",
+      "domain_strata": [
+        "education"
+      ],
+      "media_strata": [
+        "talk",
+        "medium"
+      ]
+    },
+    {
+      "id": "live-evidence-3b1b-neural-sigmoid",
+      "suite": "transcript",
+      "task": "live_evidence",
+      "mode": "live",
+      "input": {
+        "video_id": "aircAruvnKk",
+        "query": "sigmoid",
+        "lang": "en"
+      },
+      "expected": {
+        "ok": true
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              628.25,
+              632.14
+            ]
+          ],
+          "tolerance_s": 3.0,
+          "k": 1
+        }
+      },
+      "video_id": "aircAruvnKk",
+      "domain_strata": [
+        "science"
+      ],
+      "media_strata": [
+        "lecture",
+        "animation",
+        "medium"
+      ]
+    }
+  ]
+}

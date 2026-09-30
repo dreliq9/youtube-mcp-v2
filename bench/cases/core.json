@@ -1,0 +1,1317 @@
+{
+  "benchmark_version": "0.2",
+  "adapter": "youtube_mcp_v2",
+  "description": "Core deterministic suites: installation/protocol over stdio, metadata, transcript provenance and temporal evidence, long-context delivery, and fault tolerance against scripted upstream failures. All transcripts and watch pages are benchmark-owned synthetic fixtures (bench/fixtures/synthetic.py); only their SHA-256 hashes appear here.",
+  "revision_notes": "0.2 adds protocol, metadata, long_context and fault_tolerance suites, scripted upstream fixtures, metric scorers (field accuracy, provenance completeness, temporal hit/MRR, survival/structured-error/fallback), and known_issue (xfail) cases. Revision 0.1 (deterministic.json) is unchanged.",
+  "cases": [
+    {
+      "id": "proto-stdio-initialize",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "deterministic",
+      "input": {},
+      "expected": {
+        "launched": true,
+        "protocol_version": {
+          "$type": "string"
+        },
+        "server_name": {
+          "$present": true
+        },
+        "init_ms": {
+          "$lte": 15000
+        }
+      },
+      "notes": "Spawns the server over stdio with the MCP SDK client and completes initialize.",
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ],
+      "tags": [
+        "stdio"
+      ]
+    },
+    {
+      "id": "proto-tools-list-documented-surface",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "deterministic",
+      "input": {},
+      "expected": {
+        "tool_count": {
+          "$gte": 1
+        },
+        "documented_tools_present": true,
+        "missing_documented_tools": [],
+        "transcript_tool": {
+          "$present": true
+        }
+      },
+      "notes": "Every tool the adapter documents for this server is listed by tools/list.",
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ],
+      "tags": [
+        "stdio"
+      ]
+    },
+    {
+      "id": "proto-tool-schemas-and-descriptions",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "deterministic",
+      "input": {},
+      "expected": {
+        "schemas": {
+          "all_object": true,
+          "all_described": true
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ],
+      "tags": [
+        "stdio"
+      ]
+    },
+    {
+      "id": "proto-first-call-invalid-url-structured",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "deterministic",
+      "input": {},
+      "expected": {
+        "invalid_input": {
+          "handled": true,
+          "machine_code": {
+            "$present": true
+          },
+          "recoverable": {
+            "$type": "boolean"
+          }
+        }
+      },
+      "notes": "First call after initialize with a non-YouTube URL must return a machine-readable error, not a crash or prose-only error.",
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ],
+      "tags": [
+        "stdio"
+      ]
+    },
+    {
+      "id": "proto-unknown-tool-survival",
+      "suite": "protocol",
+      "task": "protocol_probe",
+      "mode": "deterministic",
+      "input": {},
+      "expected": {
+        "unknown_tool": {
+          "rejected": true,
+          "survived": true
+        }
+      },
+      "notes": "Calling a nonexistent tool is rejected and the session keeps serving tools/list.",
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "protocol"
+      ],
+      "tags": [
+        "stdio"
+      ]
+    },
+    {
+      "id": "install-metadata-consistent",
+      "suite": "protocol",
+      "task": "install_metadata",
+      "mode": "deterministic",
+      "input": {},
+      "expected": {
+        "import_ok": true,
+        "installed": true,
+        "version_consistent": true,
+        "console_script": true,
+        "requires_python": {
+          "$present": true
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "install"
+      ],
+      "tags": [
+        "install"
+      ]
+    },
+    {
+      "id": "meta-manual-captions",
+      "suite": "metadata",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "https://youtu.be/bnchMeta001"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Bench Synthetic Treaty Lecture",
+        "channel": "Bench Archive Channel",
+        "channel_id": "UCbenchArchive000000000",
+        "duration_s": 60,
+        "has_transcript": true,
+        "available_caption_langs": [
+          "en"
+        ],
+        "livestream": false,
+        "age_gated": false
+      },
+      "video_id": "bnchMeta001",
+      "fixture": {
+        "watch_page": {
+          "page": "manual-en"
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "lecture",
+        "manual-captions"
+      ]
+    },
+    {
+      "id": "meta-generated-captions-only",
+      "suite": "metadata",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "https://youtu.be/bnchMeta002"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Bench Synthetic Custard Demo",
+        "channel": "Bench Kitchen",
+        "duration_s": 60,
+        "has_transcript": true,
+        "available_caption_langs": [
+          "en"
+        ]
+      },
+      "video_id": "bnchMeta002",
+      "fixture": {
+        "watch_page": {
+          "page": "generated-only"
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "domain_strata": [
+        "cooking"
+      ],
+      "media_strata": [
+        "tutorial",
+        "generated-captions"
+      ]
+    },
+    {
+      "id": "meta-multilingual-tracks",
+      "suite": "metadata",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "https://youtu.be/bnchMeta003"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Bench Synthetic Chemistry Primer",
+        "duration_s": 150,
+        "available_caption_langs": [
+          "en",
+          "fr",
+          "de"
+        ],
+        "lang_default": "en"
+      },
+      "video_id": "bnchMeta003",
+      "fixture": {
+        "watch_page": {
+          "page": "multilingual"
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "domain_strata": [
+        "science"
+      ],
+      "media_strata": [
+        "lecture",
+        "multilingual"
+      ]
+    },
+    {
+      "id": "meta-no-captions",
+      "suite": "metadata",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "https://youtu.be/bnchMeta004"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Bench Synthetic Silent Timelapse",
+        "duration_s": 95,
+        "has_transcript": false,
+        "available_caption_langs": []
+      },
+      "video_id": "bnchMeta004",
+      "fixture": {
+        "watch_page": {
+          "page": "no-captions"
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "domain_strata": [
+        "arts"
+      ],
+      "media_strata": [
+        "music-or-silent",
+        "no-captions"
+      ]
+    },
+    {
+      "id": "meta-livestream-archive",
+      "suite": "metadata",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "https://youtu.be/bnchMeta005"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Bench Synthetic Match Stream",
+        "channel": "Bench Sports",
+        "duration_s": 3780,
+        "livestream": true
+      },
+      "video_id": "bnchMeta005",
+      "fixture": {
+        "watch_page": {
+          "page": "livestream-archive"
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "domain_strata": [
+        "sports"
+      ],
+      "media_strata": [
+        "livestream-archive",
+        "long"
+      ]
+    },
+    {
+      "id": "meta-age-gated-restricted",
+      "suite": "metadata",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "https://youtu.be/bnchMeta006"
+      },
+      "expected": {
+        "ok": true,
+        "title": "Bench Synthetic Restricted Clip",
+        "age_gated": true,
+        "embed_allowed": false
+      },
+      "video_id": "bnchMeta006",
+      "fixture": {
+        "watch_page": {
+          "page": "age-gated"
+        }
+      },
+      "scoring": {
+        "method": "metadata_fields"
+      },
+      "domain_strata": [
+        "entertainment"
+      ],
+      "media_strata": [
+        "restricted"
+      ]
+    },
+    {
+      "id": "tx-manual-primary-provenance",
+      "suite": "transcript",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxHist1"
+      },
+      "expected": {
+        "ok": true,
+        "source": "scrape",
+        "validated": true,
+        "provider": "youtube-transcript-api",
+        "method": "captions",
+        "lang": "en",
+        "is_generated": false,
+        "warning_kinds": [],
+        "text_sha256": "f855788a76fc6bf6e0a4374b9da415df1f188079a8ffc651f64d64b46d1bd9b7",
+        "provenance": {
+          "video_id": "bnchTxHist1",
+          "transcript_type": "manual",
+          "validation_state": "pass"
+        }
+      },
+      "video_id": "bnchTxHist1",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "hist-treaty"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "provenance"
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "lecture",
+        "manual-captions"
+      ]
+    },
+    {
+      "id": "tx-generated-captions-labelled",
+      "suite": "transcript",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxCook1"
+      },
+      "expected": {
+        "ok": true,
+        "is_generated": true,
+        "provider": "youtube-transcript-api",
+        "text_sha256": "190e5a537e17b267e5bf25309c69f355b4a63a949a16141d2012f64e7e729628",
+        "provenance": {
+          "transcript_type": "generated"
+        }
+      },
+      "video_id": "bnchTxCook1",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": true,
+              "transcript": "cook-sauce"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "provenance"
+      },
+      "domain_strata": [
+        "cooking"
+      ],
+      "media_strata": [
+        "tutorial",
+        "generated-captions"
+      ]
+    },
+    {
+      "id": "tx-lang-fallback-disclosed",
+      "suite": "transcript",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxLang1",
+        "lang": "es"
+      },
+      "expected": {
+        "ok": true,
+        "requested_lang": "es",
+        "lang": "en",
+        "warning_kinds": {
+          "$contains": "lang_fallback"
+        },
+        "provenance": {
+          "requested_lang": "es",
+          "actual_lang": "en"
+        }
+      },
+      "video_id": "bnchTxLang1",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "hist-treaty"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "provenance"
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "lecture",
+        "multilingual"
+      ]
+    },
+    {
+      "id": "tx-ytdlp-vtt-fallback-hours",
+      "suite": "transcript",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxSprt1"
+      },
+      "expected": {
+        "ok": true,
+        "provider": "yt-dlp",
+        "validated": true,
+        "text_sha256": "110dd6d8678e8b1ebf002ce04657b0b6f9c294ebf794d4e8e809764719a0e42b",
+        "attempts": [
+          {
+            "provider": "youtube-transcript-api",
+            "outcome": {
+              "$in": [
+                "unavailable",
+                "no_transcript",
+                "error"
+              ]
+            }
+          },
+          {
+            "provider": "yt-dlp",
+            "outcome": "success"
+          }
+        ]
+      },
+      "video_id": "bnchTxSprt1",
+      "fixture": {
+        "native": {
+          "raise": "NoTranscriptFound"
+        },
+        "ytdlp": {
+          "manual": {
+            "en": "sport-final"
+          },
+          "format": "vtt"
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 3780
+          }
+        }
+      },
+      "scoring": {
+        "method": "provenance"
+      },
+      "domain_strata": [
+        "sports"
+      ],
+      "media_strata": [
+        "livestream-archive",
+        "long",
+        "vtt"
+      ]
+    },
+    {
+      "id": "tx-cache-hit-provenance",
+      "suite": "transcript",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxHist2",
+        "repeat": 2
+      },
+      "expected": {
+        "ok": true,
+        "source": "cache",
+        "provider": "youtube-transcript-api",
+        "text_sha256": "f855788a76fc6bf6e0a4374b9da415df1f188079a8ffc651f64d64b46d1bd9b7",
+        "upstream_calls_after_first": 0,
+        "first": {
+          "source": "scrape",
+          "text_sha256": "f855788a76fc6bf6e0a4374b9da415df1f188079a8ffc651f64d64b46d1bd9b7"
+        }
+      },
+      "video_id": "bnchTxHist2",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "hist-treaty"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "provenance"
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "lecture",
+        "cache"
+      ],
+      "notes": "A cache hit must preserve acquisition provenance and make zero upstream calls."
+    },
+    {
+      "id": "long-chunked-podcast-2h",
+      "suite": "long_context",
+      "task": "transcript_chunked",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchLong001",
+        "chunk_tokens": 500,
+        "chunk_overlap": 50
+      },
+      "expected": {
+        "ok": true,
+        "chunk_count": {
+          "$gte": 10
+        },
+        "n_consistent": true,
+        "ordered": true,
+        "segment_coverage": 1.0,
+        "max_chunk_tokens": {
+          "$lte": 600
+        }
+      },
+      "video_id": "bnchLong001",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "podcast-long"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 7200
+          }
+        }
+      },
+      "scoring": {
+        "method": "subset"
+      },
+      "domain_strata": [
+        "podcast"
+      ],
+      "media_strata": [
+        "podcast",
+        "long"
+      ]
+    },
+    {
+      "id": "long-timed-pagination-complete",
+      "suite": "long_context",
+      "task": "transcript_timed_pages",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchLong002"
+      },
+      "expected": {
+        "ok": true,
+        "pages": {
+          "$gte": 2
+        },
+        "total_segments": 1200,
+        "collected_segments": 1200,
+        "unique_starts": 1200,
+        "monotonic": true,
+        "text_sha256": "be94195c8822ce320fdaf9754ccc711688bef3075d73483036529945444d6ef2"
+      },
+      "video_id": "bnchLong002",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "podcast-long"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 7200
+          }
+        }
+      },
+      "scoring": {
+        "method": "subset"
+      },
+      "domain_strata": [
+        "podcast"
+      ],
+      "media_strata": [
+        "podcast",
+        "long"
+      ]
+    },
+    {
+      "id": "tx-evidence-native-lecture",
+      "suite": "transcript",
+      "task": "transcript_evidence",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxSci01",
+        "query": "Avogadro constant"
+      },
+      "expected": {
+        "ok": true
+      },
+      "video_id": "bnchTxSci01",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "sci-avogadro"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 150
+          }
+        }
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              125.0,
+              129.5
+            ]
+          ],
+          "tolerance_s": 0.25,
+          "k": 1
+        }
+      },
+      "domain_strata": [
+        "science"
+      ],
+      "media_strata": [
+        "lecture",
+        "manual-captions"
+      ]
+    },
+    {
+      "id": "tx-evidence-hyphenated-phrase",
+      "suite": "transcript",
+      "task": "transcript_evidence",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxCook2",
+        "query": "sixty-two degrees"
+      },
+      "expected": {
+        "ok": true
+      },
+      "video_id": "bnchTxCook2",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": true,
+              "transcript": "cook-sauce"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              42.0,
+              47.4
+            ]
+          ],
+          "tolerance_s": 0.25,
+          "k": 1
+        }
+      },
+      "domain_strata": [
+        "cooking"
+      ],
+      "media_strata": [
+        "tutorial",
+        "generated-captions"
+      ]
+    },
+    {
+      "id": "tx-evidence-vtt-hour-timestamps",
+      "suite": "transcript",
+      "task": "transcript_evidence",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxSprt2",
+        "query": "final score is three to two"
+      },
+      "expected": {
+        "ok": true
+      },
+      "video_id": "bnchTxSprt2",
+      "fixture": {
+        "native": {
+          "raise": "NoTranscriptFound"
+        },
+        "ytdlp": {
+          "manual": {
+            "en": "sport-final"
+          },
+          "format": "vtt"
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 3780
+          }
+        }
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              3720.5,
+              3725.9
+            ]
+          ],
+          "tolerance_s": 0.25,
+          "k": 1
+        }
+      },
+      "domain_strata": [
+        "sports"
+      ],
+      "media_strata": [
+        "livestream-archive",
+        "long",
+        "vtt"
+      ]
+    },
+    {
+      "id": "tx-evidence-json3-auto-captions",
+      "suite": "transcript",
+      "task": "transcript_evidence",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchTxPol01",
+        "query": "H.R. 4521"
+      },
+      "expected": {
+        "ok": true
+      },
+      "video_id": "bnchTxPol01",
+      "fixture": {
+        "native": {
+          "raise": "NoTranscriptFound"
+        },
+        "ytdlp": {
+          "auto": {
+            "en": "politics-bill"
+          },
+          "format": "json3"
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 800
+          }
+        }
+      },
+      "scoring": {
+        "method": "temporal_window",
+        "params": {
+          "windows": [
+            [
+              752.3,
+              755.9
+            ]
+          ],
+          "tolerance_s": 0.25,
+          "k": 1
+        }
+      },
+      "domain_strata": [
+        "politics"
+      ],
+      "media_strata": [
+        "news",
+        "generated-captions",
+        "json3"
+      ]
+    },
+    {
+      "id": "fault-primary-blocked-fallback",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0001"
+      },
+      "expected": {
+        "ok": true,
+        "provider": "yt-dlp",
+        "text_sha256": "f855788a76fc6bf6e0a4374b9da415df1f188079a8ffc651f64d64b46d1bd9b7",
+        "attempts": [
+          {
+            "provider": "youtube-transcript-api",
+            "outcome": "blocked"
+          },
+          {
+            "provider": "yt-dlp",
+            "outcome": "success"
+          }
+        ]
+      },
+      "video_id": "bnchFlt0001",
+      "fixture": {
+        "native": {
+          "raise": "IpBlocked"
+        },
+        "ytdlp": {
+          "manual": {
+            "en": "hist-treaty"
+          }
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_provider": "yt-dlp"
+        }
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "lecture",
+        "upstream-blocked"
+      ]
+    },
+    {
+      "id": "fault-all-providers-timeout",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0002"
+      },
+      "expected": {
+        "ok": false,
+        "recoverable": true,
+        "attempt_count": 2,
+        "attempts": [
+          {
+            "outcome": "timeout"
+          },
+          {
+            "outcome": "timeout"
+          }
+        ]
+      },
+      "video_id": "bnchFlt0002",
+      "fixture": {
+        "native": {
+          "raise": "ReadTimeout"
+        },
+        "ytdlp": {
+          "raise": "timeout"
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_error_code": "transcript_fetch_failed"
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "upstream-timeout"
+      ],
+      "notes": "After #30 merges, also assert the per-attempt detail codes / provider_class it adds."
+    },
+    {
+      "id": "fault-malformed-primary-payload",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0003"
+      },
+      "expected": {
+        "ok": true,
+        "provider": "yt-dlp",
+        "text_sha256": "f855788a76fc6bf6e0a4374b9da415df1f188079a8ffc651f64d64b46d1bd9b7"
+      },
+      "video_id": "bnchFlt0003",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "hist-treaty"
+            }
+          ]
+        },
+        "native_malformed": true,
+        "ytdlp": {
+          "manual": {
+            "en": "hist-treaty"
+          }
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          }
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_provider": "yt-dlp"
+        }
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "lecture",
+        "malformed-upstream"
+      ]
+    },
+    {
+      "id": "fault-captions-disabled-nonrecoverable",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0004"
+      },
+      "expected": {
+        "ok": false,
+        "recoverable": false
+      },
+      "video_id": "bnchFlt0004",
+      "fixture": {
+        "native": {
+          "raise": "TranscriptsDisabled"
+        },
+        "ytdlp": {
+          "raise": "missing_binary"
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_error_code": "transcripts_disabled"
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "no-captions"
+      ]
+    },
+    {
+      "id": "fault-missing-ytdlp-binary",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0005"
+      },
+      "expected": {
+        "ok": false,
+        "attempts": [
+          {
+            "provider": "youtube-transcript-api"
+          },
+          {
+            "provider": "yt-dlp",
+            "detail_code": "missing_dependency"
+          }
+        ]
+      },
+      "video_id": "bnchFlt0005",
+      "fixture": {
+        "native": {
+          "raise": "NoTranscriptFound"
+        },
+        "ytdlp": {
+          "raise": "missing_binary"
+        }
+      },
+      "scoring": {
+        "method": "fault"
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "missing-dependency"
+      ]
+    },
+    {
+      "id": "fault-ytdlp-stderr-secret-redaction",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0006"
+      },
+      "expected": {
+        "ok": false,
+        "recoverable": true
+      },
+      "video_id": "bnchFlt0006",
+      "fixture": {
+        "native": {
+          "raise": "LeakyRuntimeError"
+        },
+        "ytdlp": {
+          "stderr": "ERROR: [youtube] unable to download via {ytdlp_proxy} with cookies {cookies_file}; auth {auth_header}"
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_error_code": "transcript_fetch_failed"
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "secret-redaction"
+      ],
+      "notes": "Upstream errors echo synthetic proxy credentials / cookie path / auth header; the runner fails the case if any canary reaches output or logs."
+    },
+    {
+      "id": "fault-watch-page-rate-limited",
+      "suite": "fault_tolerance",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0007"
+      },
+      "expected": {
+        "ok": false,
+        "recoverable": true
+      },
+      "video_id": "bnchFlt0007",
+      "fixture": {
+        "watch_page": {
+          "status": 429
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_error_code": "watch_page_fetch_failed"
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "rate-limited"
+      ]
+    },
+    {
+      "id": "fault-data-api-quota-exceeded",
+      "suite": "fault_tolerance",
+      "task": "api_search",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0008",
+        "query": "bench synthetic"
+      },
+      "expected": {
+        "ok": false,
+        "recoverable": true
+      },
+      "video_id": "bnchFlt0008",
+      "fixture": {
+        "data_api": {
+          "http_status": 403,
+          "reason": "quotaExceeded"
+        }
+      },
+      "scoring": {
+        "method": "fault",
+        "params": {
+          "expect_error_code": "quota_exceeded"
+        }
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "quota"
+      ]
+    },
+    {
+      "id": "fault-corrupt-cache-row-recovers",
+      "suite": "fault_tolerance",
+      "task": "transcript_fetch",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0009"
+      },
+      "expected": {
+        "ok": true,
+        "text_sha256": "f855788a76fc6bf6e0a4374b9da415df1f188079a8ffc651f64d64b46d1bd9b7"
+      },
+      "video_id": "bnchFlt0009",
+      "fixture": {
+        "native": {
+          "tracks": [
+            {
+              "lang": "en",
+              "generated": false,
+              "transcript": "hist-treaty"
+            }
+          ]
+        },
+        "cache": {
+          "video_meta": {
+            "duration_s": 60
+          },
+          "corrupt_transcript": {
+            "lang": "en"
+          }
+        }
+      },
+      "scoring": {
+        "method": "fault"
+      },
+      "domain_strata": [
+        "history"
+      ],
+      "media_strata": [
+        "cache",
+        "corrupt-cache"
+      ],
+      "known_issue": {
+        "reason": "transcript.get json-decodes cached segments without a guard, so a corrupt cache row raises instead of refetching.",
+        "reference": "dreliq9/youtube-mcp-v2#30"
+      }
+    },
+    {
+      "id": "fault-malformed-watch-page-structured",
+      "suite": "fault_tolerance",
+      "task": "inspect_video",
+      "mode": "deterministic",
+      "input": {
+        "url_or_id": "bnchFlt0010"
+      },
+      "expected": {
+        "ok": false,
+        "error_code": {
+          "$present": true
+        }
+      },
+      "video_id": "bnchFlt0010",
+      "fixture": {
+        "watch_page": {
+          "html": "<html><head><title>Before you continue</title></head><body>consent</body></html>"
+        }
+      },
+      "scoring": {
+        "method": "fault"
+      },
+      "domain_strata": [
+        "n/a"
+      ],
+      "media_strata": [
+        "malformed-upstream"
+      ],
+      "known_issue": {
+        "reason": "inspect.video returns ok with empty title/channel when the watch page has no ytInitialPlayerResponse (consent wall or layout change) instead of a structured error."
+      }
+    }
+  ]
+}

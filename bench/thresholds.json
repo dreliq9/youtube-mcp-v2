@@ -1,0 +1,57 @@
+{
+  "description": "Per-suite regression thresholds for the deterministic benchmark (python bench/run.py --check-thresholds). Each suite is gated independently; there is no aggregate score. A suite missing from the report is a violation. Metric names are the dotted keys produced by bench.scoring.flatten (e.g. provenance_completeness.min). Raise `cases.min` when adding cases; lower `xfail.max` when a known issue is fixed.",
+  "global": {
+    "failed": {"max": 0},
+    "secret_leaks": {"max": 0},
+    "network_attempts": {"max": 0}
+  },
+  "suites": {
+    "protocol": {
+      "cases": {"min": 6},
+      "pass_rate": {"min": 1.0},
+      "xfail": {"max": 0}
+    },
+    "url": {
+      "cases": {"min": 13},
+      "pass_rate": {"min": 1.0}
+    },
+    "validation": {
+      "cases": {"min": 10},
+      "pass_rate": {"min": 1.0}
+    },
+    "corpus": {
+      "cases": {"min": 2},
+      "pass_rate": {"min": 1.0}
+    },
+    "metadata": {
+      "cases": {"min": 6},
+      "pass_rate": {"min": 1.0},
+      "field_accuracy.min": {"min": 1.0},
+      "xfail": {"max": 0}
+    },
+    "transcript": {
+      "cases": {"min": 14},
+      "pass_rate": {"min": 1.0},
+      "provenance_completeness.min": {"min": 0.8},
+      "provenance_completeness.mean": {"min": 0.9},
+      "temporal_hit.mean": {"min": 1.0},
+      "reciprocal_rank.mean": {"min": 1.0},
+      "temporal_error_s.max": {"max": 0.0},
+      "start_offset_s.max": {"max": 0.25},
+      "xfail": {"max": 0}
+    },
+    "long_context": {
+      "cases": {"min": 2},
+      "pass_rate": {"min": 1.0}
+    },
+    "fault_tolerance": {
+      "cases": {"min": 10},
+      "pass_rate": {"min": 1.0},
+      "survived.min": {"min": 1.0},
+      "structured_error.min": {"min": 1.0},
+      "fallback_correct.min": {"min": 1.0},
+      "secret_leaks": {"max": 0},
+      "xfail": {"max": 2}
+    }
+  }
+}
