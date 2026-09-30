@@ -269,13 +269,18 @@ def channel_uploads(
     if not uploads_id:
         return {"channel": channel_meta, "videos": []}
 
-    # 2. Page through the uploads playlist
+    videos = _playlist_videos(yt, uploads_id, limit)
+    return {"channel": channel_meta, "videos": videos}
+
+
+def _playlist_video_ids(yt, playlist_id: str, limit: int) -> list[str]:
+    """Page video IDs out of one playlist in playlist order (1 unit per page)."""
     video_ids: list[str] = []
     page_token: str | None = None
     while len(video_ids) < limit:
         page_params: dict[str, Any] = {
             "part": "contentDetails",
-            "playlistId": uploads_id,
+            "playlistId": playlist_id,
             "maxResults": min(50, limit - len(video_ids)),
         }
         if page_token:
@@ -288,12 +293,20 @@ def channel_uploads(
         page_token = pi_resp.get("nextPageToken")
         if not page_token:
             break
+    return video_ids[:limit]
 
+
+def _playlist_videos(
+    yt, playlist_id: str, limit: int, *, include_channel: bool = False
+) -> list[dict[str, Any]]:
+    video_ids = _playlist_video_ids(yt, playlist_id, limit)
     if not video_ids:
-        return {"channel": channel_meta, "videos": []}
+        return []
 
-    # 3. Batch-enrich (videos.list accepts up to 50 ids per call, 1 unit total)
-    videos: list[dict[str, Any]] = []
+    # Batch-enrich (videos.list accepts up to 50 ids per call, 1 unit total).
+    # Private/deleted playlist entries are absent from videos.list and are
+    # therefore dropped; order follows the playlist.
+    shaped_by_id: dict[str, dict[str, Any]] = {}
     for chunk_start in range(0, len(video_ids), 50):
         chunk = video_ids[chunk_start:chunk_start + 50]
         v_resp = _execute(
@@ -305,7 +318,7 @@ def channel_uploads(
         )
         for it in v_resp.get("items", []):
             shaped = _shape_video_full(it)
-            videos.append({
+            shaped_by_id[shaped["id"]] = {
                 "id": shaped["id"],
                 "title": shaped["title"],
                 "duration_s": shaped["duration_s"],
@@ -318,6 +331,38 @@ def channel_uploads(
                 "has_transcript": None,
                 "caption_track_id": None,
                 "lang": None,
-            })
+            }
+            if include_channel:
+                # Playlists can mix uploaders; channel uploads cannot.
+                shaped_by_id[shaped["id"]]["channel"] = shaped["channel"]
+                shaped_by_id[shaped["id"]]["channel_id"] = shaped["channel_id"]
 
-    return {"channel": channel_meta, "videos": videos}
+    return [shaped_by_id[vid] for vid in video_ids if vid in shaped_by_id]
+
+
+def playlist_items(playlist_id: str, limit: int = 50) -> dict[str, Any]:
+    """corpus.build(target='playlist') API path: ordered playlist enumeration.
+
+    ~1 quota unit per 50 items for playlistItems.list plus 1 per 50 for
+    videos.list, plus 1 for playlists.list metadata.
+    """
+    yt = _get_client()
+    pl_resp = _execute(
+        yt.playlists().list(part="snippet,contentDetails", id=playlist_id, maxResults=1)
+    )
+    items = pl_resp.get("items", [])
+    if not items:
+        return {"playlist": None, "videos": []}
+    snip = items[0].get("snippet", {}) or {}
+    playlist_meta = {
+        "id": playlist_id,
+        "title": snip.get("title", ""),
+        "channel": snip.get("channelTitle", ""),
+        "channel_id": snip.get("channelId", ""),
+        "item_count": (items[0].get("contentDetails", {}) or {}).get("itemCount"),
+        "url": f"https://www.youtube.com/playlist?list={playlist_id}",
+    }
+    return {
+        "playlist": playlist_meta,
+        "videos": _playlist_videos(yt, playlist_id, limit, include_channel=True),
+    }
