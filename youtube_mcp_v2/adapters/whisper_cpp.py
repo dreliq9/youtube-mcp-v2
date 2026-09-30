@@ -10,10 +10,8 @@ returning separate, path-safe provenance for the local engine/model/audio inputs
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -22,7 +20,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from . import audio_extract
+from . import stt_common
+from .stt_common import LocalSttError, LocalSttTimeout, LocalSttUnavailable
 from .transcript_api import Segment, TranscriptFetch
 
 
@@ -33,16 +32,19 @@ DEFAULT_TIMEOUT_S = 3600
 SAMPLE_RATE = 16000
 
 
-class LocalSttError(RuntimeError):
-    """Base local speech-to-text failure."""
+# Exceptions live in stt_common so every local backend shares them; they are
+# re-exported here for existing callers.
+__all__ = [
+    "LocalSttError",
+    "LocalSttTimeout",
+    "LocalSttUnavailable",
+    "WhisperCppResult",
+    "WhisperCppSettings",
+    "settings_from_env",
+    "transcribe_video",
+]
 
-
-class LocalSttUnavailable(LocalSttError):
-    """Configured local STT cannot run because a required local component is absent."""
-
-
-class LocalSttTimeout(LocalSttError):
-    """whisper.cpp exceeded its configured hard subprocess deadline."""
+NAME = "whisper.cpp"
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class WhisperCppSettings:
     binary: str
     model: Path
     timeout_s: int
+    language: str | None = None  # None = automatic detection
 
 
 @dataclass(frozen=True)
@@ -104,18 +107,16 @@ def settings_from_env() -> WhisperCppSettings | None:
                 "YOUTUBE_MCP_WHISPER_CPP_TIMEOUT_S must be > 0"
             )
 
-    return WhisperCppSettings(binary=binary, model=model, timeout_s=timeout_s)
+    return WhisperCppSettings(
+        binary=binary,
+        model=model,
+        timeout_s=timeout_s,
+        language=stt_common.language_hint(),
+    )
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while True:
-            block = stream.read(1024 * 1024)
-            if not block:
-                break
-            digest.update(block)
-    return digest.hexdigest()
+    return stt_common.sha256_file(path)
 
 
 @lru_cache(maxsize=16)
@@ -130,6 +131,10 @@ def _model_identity(path: Path) -> dict[str, Any]:
     stat = path.stat()
     return {
         "name": path.name,
+        # whisper.cpp models are single ggml files without an upstream revision
+        # id; the content hash is the revision identity.
+        "revision": None,
+        "format": "ggml",
         "size_bytes": stat.st_size,
         "sha256": _model_hash(str(path.resolve()), stat.st_size, stat.st_mtime_ns),
     }
@@ -148,12 +153,8 @@ def _engine_version(binary: str) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     combined = f"{completed.stdout}\n{completed.stderr}".strip()
-    if not combined:
-        return None
     # Keep only a compact first line and strip obvious absolute filesystem paths.
-    first = combined.splitlines()[0].strip()
-    first = re.sub(r"(?:[A-Za-z]:)?[/\\][^\s]+", "<path>", first)
-    return first[:160] or None
+    return stt_common.scrub_version(combined)
 
 
 def _parse_output(payload: dict[str, Any]) -> TranscriptFetch:
@@ -208,19 +209,9 @@ def transcribe_video(
     if resolved is None:
         raise LocalSttUnavailable("local whisper.cpp STT is not configured")
 
-    try:
-        audio = audio_extract.extract_audio(
-            video_id,
-            fmt="wav",
-            sample_rate=SAMPLE_RATE,
-        )
-    except audio_extract.AudioExtractError as exc:
-        raise LocalSttError("audio acquisition for local STT failed") from exc
-
-    audio_path = Path(audio.path)
-    if not audio_path.is_file():
-        raise LocalSttError("local STT audio artifact is unavailable")
-    audio_sha = _sha256_file(audio_path)
+    audio_path = stt_common.acquire_audio(video_id)
+    audio = stt_common.audio_identity(audio_path)
+    decode = decode_config(resolved)
 
     with tempfile.TemporaryDirectory(prefix="ytmcp-whisper-") as temp_dir:
         output_base = Path(temp_dir) / "transcript"
@@ -235,7 +226,7 @@ def transcribe_video(
             str(output_base),
             "-np",
             "-l",
-            "auto",
+            decode["language"],
         ]
         try:
             completed = subprocess.run(
@@ -270,15 +261,23 @@ def transcribe_video(
             raise LocalSttError("whisper.cpp JSON output could not be parsed") from exc
 
     fetch = _parse_output(payload)
-    model = _model_identity(resolved.model)
     provenance = {
-        "engine": "whisper.cpp",
+        "schema": stt_common.PROVENANCE_SCHEMA,
+        "engine": NAME,
         "engine_version": _engine_version(resolved.binary),
-        "model": model,
-        "audio": {
-            "sha256": audio_sha,
-            "sample_rate": SAMPLE_RATE,
-            "format": "wav",
-        },
+        "model": _model_identity(resolved.model),
+        "decode": decode,
+        "audio": audio,
+        "segments": stt_common.segment_summary(fetch.segments),
     }
     return WhisperCppResult(fetch=fetch, provenance=provenance)
+
+
+def decode_config(settings: WhisperCppSettings) -> dict[str, Any]:
+    """The decode configuration passed to whisper-cli, recorded in provenance."""
+    return {
+        "language": settings.language or "auto",
+        "task": "transcribe",
+        "output": "json",
+        "sample_rate": SAMPLE_RATE,
+    }

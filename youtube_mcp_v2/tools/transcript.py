@@ -235,8 +235,9 @@ def transcript_get(
     """Fetch a YouTube transcript in one of three shapes.
 
     Live acquisition is provider-independent: caption providers are tried first;
-    an explicitly configured local whisper.cpp model is the final fallback.
-    Provenance records every attempted provider and local model/audio identity.
+    an explicitly configured local STT model (mlx-whisper or whisper.cpp) is the
+    final fallback. Provenance records every attempted provider and the local
+    engine/model/decode/audio identity.
     """
     try:
         video_id = parse_video_id(url_or_id)
