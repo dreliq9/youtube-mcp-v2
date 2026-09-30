@@ -12,6 +12,7 @@ search contract or evidence identity.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -20,14 +21,23 @@ import struct
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from . import corpus_index
+
+from . import corpus_index, vector_search
 from .embeddings import EmbeddingBackend, EmbeddingError, normalize_vector
 
 SEMANTIC_SCHEMA_VERSION = 1
 RRF_K = 60.0
 DEFAULT_EMBED_BATCH = 64
+# Query-time fusion is part of an index's identity so that pinned revisions keep
+# ranking the same way after the fusion policy evolves:
+#   rrf-v1        lexical + semantic rankings (indexes built before v0.4)
+#   rrf-exact-v1  adds a third ranking of chunks that contain every identifier
+#                 token / quoted phrase in the query, so exact part numbers,
+#                 names, and numbers cannot be buried by dense similarity.
+FUSION_POLICY = "rrf-exact-v1"
+LEGACY_FUSION_POLICY = "rrf-v1"
 
 
 class HybridIndexError(corpus_index.CorpusIndexError):
@@ -42,17 +52,6 @@ def _now_iso() -> str:
 
 def _pack_vector(vector: list[float]) -> bytes:
     return struct.pack(f"<{len(vector)}f", *vector)
-
-
-def _unpack_vector(blob: bytes | None, dim: int | None) -> list[float]:
-    if blob is None or dim is None or dim <= 0:
-        raise HybridIndexError("hybrid index chunk is missing its dense embedding")
-    expected = int(dim) * 4
-    if len(blob) != expected:
-        raise HybridIndexError(
-            f"embedding blob has {len(blob)} bytes, expected {expected} for dim={dim}"
-        )
-    return list(struct.unpack(f"<{int(dim)}f", blob))
 
 
 def _publish_immutable(tmp: Path, path: Path) -> None:
@@ -108,6 +107,8 @@ def _hybrid_identity(
         "corpus_sha256": lexical.corpus_sha256,
         "requested_lang": lexical.requested_lang,
         "vector_normalization": "l2-f32le",
+        "fusion": FUSION_POLICY,
+        "vector_search": vector_search.DEFAULT_VECTOR_SEARCH,
     }
 
 
@@ -197,6 +198,8 @@ def prepare_hybrid_index(
             "parent_index_revision": lexical.index_revision,
             "embedding_dim": expected_dim or 0,
             "vector_normalization": "l2-f32le",
+            "fusion": FUSION_POLICY,
+            "vector_search": vector_search.DEFAULT_VECTOR_SEARCH,
         }
         conn.executemany(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -253,7 +256,7 @@ def latest_lexical_index(
     return None
 
 
-def _deterministic_row_key(row: sqlite3.Row) -> tuple[str, float, int]:
+def _deterministic_row_key(row: Mapping[str, Any]) -> tuple[str, float, int]:
     return (
         str(row["video_id"]),
         float(row["start_s"] or 0.0),
@@ -265,14 +268,18 @@ def _lexical_scores(
     conn: sqlite3.Connection,
     *,
     query: str,
-    rows_by_id: dict[int, sqlite3.Row],
+    allowed_rows: Mapping[int, Mapping[str, Any]],
     total_chunks: int,
     avg_doc_len: float,
-    validated_only: bool,
-) -> dict[int, float]:
+) -> tuple[dict[int, float], dict[int, str]]:
+    """BM25 over the whole frozen index, restricted to allowed chunk ids.
+
+    Returns scores and the texts of scored chunks (for phrase/exact checks);
+    text is fetched only for lexical candidates, never for the whole corpus.
+    """
     query_terms = corpus_index.tokenize(query)
     if not query_terms:
-        return {}
+        return {}, {}
 
     query_counts = Counter(query_terms)
     scores: defaultdict[int, float] = defaultdict(float)
@@ -294,8 +301,7 @@ def _lexical_scores(
         ).fetchall()
         for posting in postings:
             chunk_id = int(posting["chunk_id"])
-            row = rows_by_id.get(chunk_id)
-            if row is None or (validated_only and not bool(row["validated"])):
+            if chunk_id not in allowed_rows:
                 continue
             tf = float(posting["tf"])
             dl = float(posting["length_terms"])
@@ -303,38 +309,20 @@ def _lexical_scores(
             score = idf * ((tf * (k1 + 1.0)) / (tf + k1 * norm))
             scores[chunk_id] += score * q_weight
 
+    texts = {
+        chunk_id: str(row["text"])
+        for chunk_id, row in corpus_index.fetch_rows(conn, scores.keys(), "id, text").items()
+    }
     query_lower = query.casefold()
     for chunk_id in list(scores):
-        if query_lower in str(rows_by_id[chunk_id]["text"]).casefold():
+        if query_lower in texts.get(chunk_id, "").casefold():
             scores[chunk_id] += 0.35
-    return dict(scores)
-
-
-def _semantic_scores(
-    *,
-    query_vector: list[float],
-    rows_by_id: dict[int, sqlite3.Row],
-    validated_only: bool,
-) -> dict[int, float]:
-    scores: dict[int, float] = {}
-    query_dim = len(query_vector)
-    for chunk_id, row in rows_by_id.items():
-        if validated_only and not bool(row["validated"]):
-            continue
-        vector = _unpack_vector(row["embedding"], row["embedding_dim"])
-        if len(vector) != query_dim:
-            raise HybridIndexError(
-                f"query embedding dim {query_dim} does not match stored dim {len(vector)}"
-            )
-        # Both passage/query vectors are explicitly L2-normalized at our boundary,
-        # so dot product is cosine similarity.
-        scores[chunk_id] = sum(a * b for a, b in zip(query_vector, vector))
-    return scores
+    return dict(scores), texts
 
 
 def _rank_scores(
     scores: dict[int, float],
-    rows_by_id: dict[int, sqlite3.Row],
+    rows_by_id: Mapping[int, Mapping[str, Any]],
     *,
     candidate_limit: int,
 ) -> list[tuple[int, float]]:
@@ -354,6 +342,7 @@ def search_hybrid_index(
     index_revision: str | None = None,
     requested_lang: str = "en",
     validated_only: bool = False,
+    filters: corpus_index.SearchFilters | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Search dense + lexical evidence and fuse independent rankings with RRF."""
     query = query.strip()
@@ -363,6 +352,10 @@ def search_hybrid_index(
         raise HybridIndexError(
             f"top_k must be between 1 and {corpus_index.MAX_TOP_K}"
         )
+    if not isinstance(filters, corpus_index.SearchFilters):
+        filters = corpus_index.SearchFilters.parse(filters, validated_only=validated_only)
+    elif validated_only and not filters.validated_only:
+        filters = dataclasses.replace(filters, validated_only=True)
 
     model_id = str(getattr(backend, "model_id", "")).strip()
     if not model_id:
@@ -396,6 +389,16 @@ def search_hybrid_index(
             f"index model {prepared.model_id!r} does not match active model {model_id!r}"
         )
 
+    meta = corpus_index._read_meta(path)
+    fusion_policy = meta.get("fusion") or LEGACY_FUSION_POLICY
+    if fusion_policy not in {FUSION_POLICY, LEGACY_FUSION_POLICY}:
+        raise HybridIndexError(f"unsupported fusion policy {fusion_policy!r}")
+    try:
+        searcher = vector_search.get(meta.get("vector_search"))
+    except vector_search.VectorSearchError as exc:
+        raise HybridIndexError(str(exc)) from exc
+    record = corpus_index.retrieval_record(prepared, top_k=top_k, filters=filters, meta=meta)
+
     try:
         query_vector = normalize_vector(backend.embed_query(query))
     except EmbeddingError:
@@ -403,7 +406,6 @@ def search_hybrid_index(
     except Exception as exc:
         raise HybridIndexError("embedding backend failed during query embedding") from exc
 
-    meta = corpus_index._read_meta(path)
     try:
         total_chunks = int(meta.get("chunk_count", "0"))
         avg_doc_len = float(meta.get("avg_doc_len", "0"))
@@ -418,34 +420,58 @@ def search_hybrid_index(
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute("SELECT * FROM chunks").fetchall()
-        rows_by_id = {int(row["id"]): row for row in rows}
-        if total_chunks != len(rows_by_id):
+        sources = corpus_index.load_sources(conn)
+        corpus_index.require_filter_support(filters, sources, prepared.index_revision)
+        light_rows = {
+            int(row["id"]): row
+            for row in conn.execute(
+                f"SELECT {corpus_index.LIGHT_COLUMNS} FROM chunks"
+            ).fetchall()
+        }
+        if total_chunks != len(light_rows):
             raise HybridIndexError(
-                f"hybrid index metadata says {total_chunks} chunks but stores {len(rows_by_id)}"
+                f"hybrid index metadata says {total_chunks} chunks but stores {len(light_rows)}"
             )
+        allowed_rows = {
+            chunk_id: row
+            for chunk_id, row in light_rows.items()
+            if filters.matches(
+                row, corpus_index.source_method(sources, row["transcript_revision_id"])
+            )
+        }
 
-        lexical_scores = _lexical_scores(
+        lexical_scores, lexical_texts = _lexical_scores(
             conn,
             query=query,
-            rows_by_id=rows_by_id,
+            allowed_rows=allowed_rows,
             total_chunks=total_chunks,
             avg_doc_len=avg_doc_len,
-            validated_only=validated_only,
         )
-        semantic_scores = _semantic_scores(
-            query_vector=query_vector,
-            rows_by_id=rows_by_id,
-            validated_only=validated_only,
-        )
+        try:
+            semantic_scores = searcher.similarities(
+                conn, query_vector, allowed=allowed_rows.__contains__
+            )
+        except vector_search.VectorSearchError as exc:
+            raise HybridIndexError(str(exc)) from exc
 
         candidate_limit = min(total_chunks, max(100, top_k * 20))
         lexical_ranked = _rank_scores(
-            lexical_scores, rows_by_id, candidate_limit=candidate_limit
+            lexical_scores, light_rows, candidate_limit=candidate_limit
         )
         semantic_ranked = _rank_scores(
-            semantic_scores, rows_by_id, candidate_limit=candidate_limit
+            semantic_scores, light_rows, candidate_limit=candidate_limit
         )
+
+        identifiers, phrases = corpus_index.exact_terms(query)
+        has_exact = bool(identifiers or phrases)
+        exact_ids = corpus_index.exact_match_ids(
+            conn, lexical_texts, identifiers, phrases
+        )
+        exact_ranked = [
+            (chunk_id, score)
+            for chunk_id, score in lexical_ranked
+            if chunk_id in exact_ids
+        ]
 
         lexical_rank = {
             chunk_id: rank
@@ -455,6 +481,14 @@ def search_hybrid_index(
             chunk_id: rank
             for rank, (chunk_id, _score) in enumerate(semantic_ranked, start=1)
         }
+        exact_rank = (
+            {
+                chunk_id: rank
+                for rank, (chunk_id, _score) in enumerate(exact_ranked, start=1)
+            }
+            if fusion_policy == FUSION_POLICY
+            else {}
+        )
         candidate_ids = set(lexical_rank) | set(semantic_rank)
 
         fused: list[tuple[float, int]] = []
@@ -464,23 +498,32 @@ def search_hybrid_index(
                 score += 1.0 / (RRF_K + lexical_rank[chunk_id])
             if chunk_id in semantic_rank:
                 score += 1.0 / (RRF_K + semantic_rank[chunk_id])
+            if chunk_id in exact_rank:
+                score += 1.0 / (RRF_K + exact_rank[chunk_id])
             fused.append((score, chunk_id))
         fused.sort(
-            key=lambda item: (-item[0], *_deterministic_row_key(rows_by_id[item[1]]))
+            key=lambda item: (-item[0], *_deterministic_row_key(light_rows[item[1]]))
         )
         fused = fused[:top_k]
 
+        full_rows = corpus_index.fetch_rows(
+            conn, (chunk_id for _score, chunk_id in fused), corpus_index.hit_columns(conn)
+        )
         max_fused = fused[0][0] if fused else 1.0
         max_lex = max(lexical_scores.values(), default=0.0)
         hits: list[dict[str, Any]] = []
         for rank, (hybrid_raw, chunk_id) in enumerate(fused, start=1):
-            row = rows_by_id[chunk_id]
+            row = full_rows[chunk_id]
             lexical_raw = lexical_scores.get(chunk_id, 0.0)
             lexical_norm = lexical_raw / max_lex if max_lex > 0.0 else 0.0
             hit = corpus_index._row_to_hit(
                 row,
                 lexical_raw=lexical_raw,
                 lexical_norm=lexical_norm,
+                prepared=prepared,
+                sources=sources,
+                exact_match=(chunk_id in exact_ids) if has_exact else None,
+                query=query,
             )
             hit["rank"] = rank
             hit["scores"] = {
@@ -491,18 +534,28 @@ def search_hybrid_index(
                 "hybrid_raw": hybrid_raw,
                 "lexical_rank": lexical_rank.get(chunk_id),
                 "semantic_rank": semantic_rank.get(chunk_id),
+                "exact_match": (chunk_id in exact_ids) if has_exact else None,
+                "exact_rank": exact_rank.get(chunk_id),
             }
             hits.append(hit)
     finally:
         conn.close()
 
+    lists = ["lexical", "semantic"] + (["exact"] if fusion_policy == FUSION_POLICY else [])
     return {
         "corpus_revision": handle,
+        "corpus_manifest_sha256": prepared.corpus_manifest_sha256,
         "index_revision": prepared.index_revision,
         "backend": "hybrid",
         "model_id": prepared.model_id,
         "query": query,
+        "retrieval": record,
         "coverage": prepared.as_dict(),
-        "fusion": {"method": "reciprocal_rank_fusion", "k": RRF_K},
+        "fusion": {
+            "method": "reciprocal_rank_fusion",
+            "k": RRF_K,
+            "policy": fusion_policy,
+            "lists": lists,
+        },
         "hits": hits,
     }
