@@ -5,7 +5,7 @@
 The intended multimodal workflow is:
 
 ```text
-skeleton.build(...)
+corpus.build(...)
       ↓
 corpus.hydrate(...)          # spoken evidence cache, where needed
       ↓

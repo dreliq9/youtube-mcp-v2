@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — v0.3 corpus revisions
+
+### Added
+- `corpus.build(target='channel'|'playlist'|'topic'|'videos')` captures immutable corpus revisions with a versioned acquisition manifest (server version, capture time, canonical IDs/URLs, per-video metadata hashes, capture-time metadata/transcript revisions, provider attempts, lineage).
+- Playlist corpora (Data API when keyed, otherwise yt-dlp) and explicit video-set corpora (cache, then watch page) work without an API key.
+- `corpus.get`, cursor-paginated `corpus.list` and `corpus.index`, and `corpus.diff` with separate added/removed/metadata/transcript/provenance sections.
+- `CORPUS_REVISIONS.md` documents the revision and manifest schema.
+
+### Changed
+- `skeleton.build` and `corpus.compose` now write manifest-bearing revisions in the same storage; old files are untouched and readable as legacy revisions.
+- The `skeleton.*` tools are only registered when `YOUTUBE_MCP_LEGACY_SKELETON_TOOLS=1` (default tool count 22 → 21).
+- Expiring a v0.3 revision writes a lifecycle sidecar instead of rewriting the revision file; legacy files keep the v0.2 in-place behavior.
+- Data API playlist enumeration preserves playlist order.
+
 ## 0.2.1 — unreleased
 
 ### Compatibility

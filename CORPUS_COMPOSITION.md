@@ -80,9 +80,9 @@ These bounds control tool payload size; they are not intended to define the even
 Freeze separate topic/channel corpora, then combine them:
 
 ```text
-history_set = skeleton.build(target="topic", value="productive failure history")
-biology_set = skeleton.build(target="topic", value="adaptation failure biology")
-coaching_set = skeleton.build(target="topic", value="learning from mistakes coaching")
+history_set = corpus.build(target="topic", value="productive failure history")
+biology_set = corpus.build(target="topic", value="adaptation failure biology")
+coaching_set = corpus.build(target="topic", value="learning from mistakes coaching")
 
 mixed = corpus.compose(
   label="productive failure across domains",

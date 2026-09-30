@@ -90,6 +90,8 @@ This makes queries such as "compare how four unrelated disciplines treat the sam
 
 Every frozen corpus records schema/revision, origin/composition provenance, capture time, canonical video IDs/URLs, and server/tool version where possible.
 
+Status: implemented by `corpus.build/get/list/index/diff` (`youtube-mcp.corpus/1`, see `CORPUS_REVISIONS.md`). Historical skeleton files are read as legacy revisions with a derived manifest.
+
 ### v0.3 exit criteria
 
 - channel/topic/explicit/mixed corpora can be frozen without reinterpretation,
