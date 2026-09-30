@@ -165,6 +165,8 @@ Use both conceptual paraphrase queries and exact-string queries across different
 
 Metrics: Recall@1/5/10, MRR, timestamp-window hit rate, temporal distance, exact-string recall, token cost per successful retrieval.
 
+Implemented (synthetic, offline): `bench/retrieval_suite.py` builds a multi-domain corpus with 12 exact/conceptual strata (product and legal identifiers, prices, citations, scientific notation, quoted phrases, UI labels, names/dates, error codes, a paraphrase, cooking, history quotes), plants gold windows and hard negatives, and reports per mode × stratum: `recall@k`, `success@k`, `reciprocal_rank`, `temporal_hit@k` (cited timestamp inside the gold window), `temporal_error_s`, `window_iou`, latency p50/p95, and response bytes. Metric definitions live in `bench/retrieval_metrics.py`. Real-corpus annotation remains the v0.4 exit gate.
+
 ### G. Visual evidence retrieval
 
 Queries target maps, slides, diagrams, objects, demonstrations, artwork, charts, products, game/UI states, numeric values, or other imagery visible on screen.

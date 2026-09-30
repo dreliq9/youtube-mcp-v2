@@ -70,6 +70,7 @@ corpus.search(
     handle,
     query,
     top_k=10,
+    filters=None,
     lang="en",
     index_revision=None,
     validated_only=False,
@@ -86,23 +87,36 @@ When no revision is supplied:
 - `auto` prefers a compatible local hybrid index/model and falls back to lexical when semantic retrieval is not local, and
 - `required` selects/builds a hybrid index for the configured model.
 
+### Filters
+
+`filters` restricts which evidence may be returned. It never changes ranking statistics (BM25 document frequencies and dense similarities are always computed over the whole frozen index), so the same filters on the same `index_revision` are reproducible. Unknown keys are rejected with `bad_filters`.
+
+| key | meaning |
+|---|---|
+| `video_ids` | only these member videos |
+| `exclude_video_ids` | never these videos |
+| `channels` | only these channel names (as frozen in the corpus) |
+| `time_range_s` | `[start_s, end_s]`; chunks overlapping this span of each video |
+| `validated_only` | only transcript revisions whose validation status is `pass` (same as the top-level flag) |
+| `acquisition_methods` | `captions` and/or `local_stt` |
+| `is_generated` | `true`/`false` generated-caption (or STT) status |
+
+`acquisition_methods` needs an index built by this version (schema 2); older pinned indexes return a clear error instead of guessing.
+
+### Hit contract
+
 Each hit includes:
 
-- rank,
+- `rank` and a stable `evidence_id` (`ev_` + chunk digest),
 - video ID, title, and channel,
-- canonical YouTube URL with timestamp when timing exists,
-- `start_s` / `end_s`,
-- supporting excerpt,
-- lexical, semantic, and final hybrid scores when applicable,
-- component lexical/semantic ranks for hybrid retrieval,
-- chunk index and chunk SHA-256,
-- transcript revision ID and SHA-256,
-- requested and actual caption language,
-- generated-caption status when known,
-- transcript validation state and warnings, and
-- transcript acquisition timestamp.
+- `url`: canonical YouTube URL at the chunk start, plus `anchor` — the exact source segment inside the chunk that best matches the query (`start_s`, `end_s`, `url`, `segment`, `basis: exact|lexical|chunk`),
+- `start_s` / `end_s` and the supporting `excerpt`,
+- `scores`: `lexical`, `semantic`, `hybrid`, `exact_match`, plus `lexical_rank` / `semantic_rank` / `exact_rank` for hybrid retrieval,
+- `chunk`: index, SHA-256, and `segment_range` into the source transcript revision,
+- `transcript`: revision ID and SHA-256, requested/actual language, generated status, `validated`, `validation_status` (`pass|partial|fail`, see `EVIDENCE_MODEL.md`), warnings, fetch time, and `acquisition` — provider, method (`captions|local_stt`), provider class, attempts, and for local STT the engine, model identity/revision, decode config, source-audio SHA-256, and segment timing summary,
+- `corpus_revision` and `index_revision`.
 
-The response also identifies the frozen `corpus_revision`, immutable `index_revision`, retrieval class, and embedding model identity when a hybrid index is used.
+The response also identifies the frozen `corpus_revision`, `corpus_manifest_sha256` (when the corpus revision carries one), immutable `index_revision`, `coverage`, and a `retrieval` record: class, index schema, chunker, lexical scorer, embedding model identity when hybrid, fusion policy, vector-search implementation, `top_k`, and the applied filters. Backend and model *choices* are never tool inputs; they are reported only as provenance.
 
 ## Reproducibility invariant
 
@@ -112,12 +126,16 @@ An index revision represents:
 frozen corpus membership
 + corpus capture identity
 + requested language
-+ chunking policy
++ chunking policy (chunker id, budget, overlap)
 + exact transcript revision IDs
 + exact transcript SHA-256 hashes
 + retrieval backend/model identity
 + vector normalization/schema when semantic
++ fusion policy and vector-search implementation when semantic
++ index schema version
 ```
+
+Index schema 2 (this release) adds a frozen `sources` table — per transcript revision: validation status, duration, and a copy of the acquisition provenance — and per-segment timings for anchors. New indexes therefore get new revisions; existing pinned schema-1 indexes still open and rank exactly as before (no anchors, `acquisition: null`).
 
 Mutable lifecycle metadata such as `expired_at` is intentionally excluded from corpus identity.
 
@@ -129,17 +147,25 @@ The lexical layer uses BM25-style ranking and a tokenizer that preserves technic
 
 An exact phrase match receives a small boost, but candidates still come from the inverted index.
 
+### Chunking
+
+`timestamp-boundary-v1` packs whole caption/STT segments (never splitting one, so every chunk boundary is a real timing) up to the token budget, and closes a chunk early at a sentence end or a speech pause of at least 1.5 s once it is 60% full. Each chunk records its `segment_start:segment_end` range and the character offset + timing of every segment, which is how hits cite an exact `anchor` without reloading the transcript. The previous `token-window-v1` behavior remains available internally and is part of index identity.
+
 ## Dense semantic retrieval
 
 Hybrid indexes copy the frozen lexical evidence artifact, then add L2-normalized float32 dense vectors to those exact chunks. Passage and query embeddings use retrieval-specific backend methods.
 
-The first vector search implementation performs an exact scan across indexed chunks. This is intentionally simple and reproducible. It avoids introducing a vector database/service before benchmark data shows where approximate-nearest-neighbor indexing becomes necessary.
+The first vector search implementation (`exact-scan-v1`) performs an exact scan across indexed chunks. This is intentionally simple and reproducible. It avoids introducing a vector database/service before benchmark data shows where approximate-nearest-neighbor indexing becomes necessary.
+
+Vector search sits behind the internal `youtube_mcp_v2.vector_search` seam: a `VectorSearch` protocol plus a registry keyed by the name recorded in each hybrid index. A future ANN implementation registers under a new name; indexes built with it record that name, old indexes keep using the exact scan, and an index that names an implementation this server does not provide fails closed rather than silently changing results. None of this appears in the MCP tool inputs.
 
 Semantic retrieval can therefore surface a passage even when **none of the query words appear verbatim in that passage**.
 
 ## Hybrid fusion
 
 Lexical and semantic rankings are fused with reciprocal rank fusion (RRF), rather than directly adding incomparable BM25 and cosine score scales. The candidate set is the union of leading lexical and semantic rankings.
+
+The default policy, `rrf-exact-v1`, adds a third ranked list: chunks that contain every identifier-like query token (anything with a digit or a technical separator — part numbers, case numbers, prices, dates, error codes, citations) and every quoted phrase verbatim. Without it, a dense model that disagrees with the lexical ranking can push an exact part number below near-miss passages. Indexes built before this policy record no fusion key and keep ranking with plain `rrf-v1`.
 
 This preserves two important behaviors simultaneously:
 
@@ -159,6 +185,10 @@ A corpus can be prepared even when only some member videos have cached transcrip
 - chunk count.
 
 Tool responses warn when coverage is partial. `validated_only=true` can further restrict retrieval to transcript revisions that passed the available validation gates.
+
+## Scale
+
+Search never loads transcripts into model context, and never loads the whole corpus into server memory either: hybrid search scans only light per-chunk columns (IDs, timing, filter fields) plus stored vectors streamed row by row, reads text only for lexical candidates, and materializes full rows for the final `top_k`. The test suite builds a synthetic 100+ hour corpus (100 videos × 61 min) and asserts needles are found with responses under 64 KB; `bench/retrieval_suite.py --hours 100` reports latency and recall at that size.
 
 ## Future scaling and multimodal extension
 

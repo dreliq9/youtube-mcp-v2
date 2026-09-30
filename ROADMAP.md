@@ -125,6 +125,8 @@ Exact-string benchmark categories must come from multiple domains, including nam
 - benchmark Recall@k/timestamp targets are met across multiple domain strata,
 - missing captions can enter the same search workflow through local STT.
 
+Status (issue #5): local STT adapter interface with mlx-whisper + whisper.cpp backends, frozen per-revision acquisition/validation provenance in indexes, boundary-aware chunking with segment anchors, exact-identifier fusion, search filters, a replaceable vector-search seam, a ≥100-hour synthetic scale test, and `bench/retrieval_suite.py` (Recall@k, MRR, temporal-hit, temporal error, window IoU per stratum) are in place. Remaining for exit: Recall@k/timestamp targets measured on a real annotated multi-domain corpus with a real embedding model and real STT output (the current suite is synthetic), and folding the retrieval metrics into the Bench 0.2 manifest scorer.
+
 ---
 
 ## v0.5 — Multimodal temporal evidence

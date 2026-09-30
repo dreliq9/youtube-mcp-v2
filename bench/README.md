@@ -19,6 +19,16 @@ Outputs are written to the ignored `bench/results/` directory:
 
 A nonzero exit code means at least one scored case failed.
 
+## Retrieval suite
+
+```bash
+python bench/retrieval_suite.py              # ~12 h synthetic corpus, a second or two
+python bench/retrieval_suite.py --hours 100  # scale run
+python bench/retrieval_suite.py --embedder local   # also score the locally cached semantic model
+```
+
+Writes `bench/results/retrieval.json` and `retrieval.md`; exits nonzero when a minimum in `retrieval_thresholds.json` is violated. The default hybrid mode uses a deterministic hashing embedder, so it measures indexing, fusion, exact-identifier preservation, and timestamp anchoring — not the semantic quality of a real model. `retrieval_metrics.py` is standard-library only so the Bench 0.2 scorer can import it as a scoring method.
+
 ## First 30 cases
 
 The initial manifest covers:
@@ -70,6 +80,6 @@ The next benchmark increments should add:
 3. frozen corpus-diff fixtures,
 4. live metadata/transcript cases behind an explicit live flag,
 5. competitor adapters,
-6. semantic/visual temporal-retrieval scoring as those product capabilities land.
+6. visual temporal-retrieval scoring, and real annotated transcript-retrieval cases scored with `retrieval_metrics.py`.
 
 Live cases must remain opt-in and must never block ordinary PR CI solely because YouTube throttled a runner IP.
