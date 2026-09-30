@@ -7,11 +7,43 @@ existing frozen research snapshots unreadable.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
+from typing_extensions import TypedDict
 
 from .. import corpus_hydration, corpus_index, embeddings, envelope, hybrid_index
 
 SemanticMode = Literal["off", "auto", "required"]
+
+
+class CorpusSearchFilters(TypedDict, total=False):
+    """Evidence filters for `corpus.search` (all optional, combined with AND)."""
+
+    video_ids: Annotated[
+        list[str], Field(description="Only return evidence from these member video IDs.")
+    ]
+    exclude_video_ids: Annotated[
+        list[str], Field(description="Never return evidence from these video IDs.")
+    ]
+    channels: Annotated[
+        list[str], Field(description="Only videos whose channel name matches exactly.")
+    ]
+    time_range_s: Annotated[
+        list[float],
+        Field(description="[start_s, end_s]: only chunks overlapping this in-video window."),
+    ]
+    validated_only: Annotated[
+        bool, Field(description="Only transcript revisions that passed every validation gate.")
+    ]
+    acquisition_methods: Annotated[
+        list[Literal["captions", "local_stt"]],
+        Field(description="Only transcripts acquired this way, e.g. local speech-to-text."),
+    ]
+    is_generated: Annotated[
+        bool,
+        Field(description="true: auto-generated/STT transcripts only; false: human captions only."),
+    ]
 
 
 def _coverage_warning(prepared: corpus_index.PreparedIndex) -> str | None:
@@ -155,6 +187,7 @@ def corpus_search(
     handle: str,
     query: str,
     top_k: int = 10,
+    filters: CorpusSearchFilters | dict[str, Any] | None = None,
     lang: str = "en",
     index_revision: str | None = None,
     validated_only: bool = False,
@@ -166,8 +199,16 @@ def corpus_search(
     Semantic implementation details remain hidden behind `off|auto|required`.
     Supplying an explicit index revision pins both evidence inputs and retrieval
     model identity; auto mode will not download a missing semantic model.
+    `filters` restricts which evidence may be returned without changing ranking
+    statistics, so the same filters on the same index revision are reproducible.
     """
     warnings: list[str] = []
+    try:
+        parsed_filters = corpus_index.SearchFilters.parse(
+            filters, validated_only=validated_only
+        )
+    except corpus_index.CorpusIndexError as exc:
+        return envelope.fail("bad_filters", str(exc), recoverable=False)
     try:
         if semantic not in {"off", "auto", "required"}:
             raise embeddings.EmbeddingError(f"invalid semantic mode: {semantic!r}")
@@ -275,7 +316,7 @@ def corpus_search(
                 top_k=top_k,
                 index_revision=prepared.index_revision,
                 requested_lang=lang,
-                validated_only=validated_only,
+                filters=parsed_filters,
             )
         else:
             result = corpus_index.search_index(
@@ -284,7 +325,7 @@ def corpus_search(
                 top_k=top_k,
                 index_revision=prepared.index_revision,
                 requested_lang=lang,
-                validated_only=validated_only,
+                filters=parsed_filters,
             )
     except FileNotFoundError as exc:
         return envelope.fail("corpus_not_found", str(exc), recoverable=False)
