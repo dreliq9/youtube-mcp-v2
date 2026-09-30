@@ -24,6 +24,7 @@ def _reference(path: str, video_id: str) -> tuple[dict[str, object], list[str]]:
             "resource_mime_type": None,
             "resource_size_bytes": None,
             "resource_portable": False,
+            "resource_sha256": None,
         }, [f"frame resource reference unavailable: {exc}"]
     warnings: list[str] = []
     if not ref.portable:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,7 +14,7 @@ from mcp.server import MCPServer
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
-from . import artifacts, visual_resources
+from . import __version__, artifacts, remote, visual_resources
 from .tools.inspect import inspect_video as _inspect_video
 from .tools.transcript import transcript_get as _transcript_get
 from .tools.scrape import scrape_search as _scrape_search
@@ -45,7 +47,64 @@ from .tools.api import (
 log = logging.getLogger("youtube-mcp-v2")
 logging.basicConfig(level=logging.INFO)
 
-mcp = MCPServer("YouTube v0.2.1")
+mcp = MCPServer(f"YouTube v{__version__}", version=__version__)
+
+
+def _tool(*, name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Register a tool whose every response passes through `remote.finalize_tool_result`.
+
+    That final step redacts configured secret values from all responses and, in
+    remote (Streamable HTTP) mode, withholds server-local filesystem paths.
+    Tools whose only output is server-local files are not registered remotely.
+    """
+
+    def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            try:
+                result = fn(*args, **kwargs)
+            except Exception as exc:
+                # Uncaught exceptions become protocol error text; scrub it too.
+                message = remote.finalize_tool_result(str(exc))
+                if message != str(exc):
+                    raise RuntimeError(message) from None
+                raise
+            return remote.finalize_tool_result(result)
+
+        if remote.remote_mode() and name in remote.LOCAL_ONLY_TOOLS:
+            return fn
+        mcp.tool(name=name)(wrapped)
+        return fn
+
+    return decorate
+
+
+def _resource(uri: str, *, mime_type: str) -> Callable[[Callable[..., bytes]], Callable[..., bytes]]:
+    """Register a binary resource whose failures reach clients as clear errors.
+
+    Artifact errors (missing, too large, invalid identity) become MCP resource
+    errors with a scrubbed message instead of an opaque internal error, so a
+    remote client learns *why* a read failed without seeing server paths.
+    """
+    try:
+        from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
+    except ImportError:  # pragma: no cover - older 2.x layout
+        ResourceError = ResourceNotFoundError = RuntimeError  # type: ignore[misc,assignment]
+
+    def decorate(fn: Callable[..., bytes]) -> Callable[..., bytes]:
+        @functools.wraps(fn)
+        def wrapped(*args: Any, **kwargs: Any) -> bytes:
+            try:
+                return fn(*args, **kwargs)
+            except (artifacts.ArtifactNotFound, FileNotFoundError) as exc:
+                raise ResourceNotFoundError(remote.finalize_tool_result(str(exc))) from None
+            except (artifacts.ArtifactError, visual_resources.VisualResourceError) as exc:
+                raise ResourceError(remote.finalize_tool_result(str(exc))) from None
+
+        mcp.resource(uri, mime_type=mime_type)(wrapped)
+        return fn
+
+    return decorate
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +112,7 @@ mcp = MCPServer("YouTube v0.2.1")
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="inspect.video")
+@_tool(name="inspect.video")
 def tool_inspect_video(url_or_id: str) -> dict[str, Any]:
     """Pre-flight check on a YouTube video.
 
@@ -69,7 +128,7 @@ def tool_inspect_video(url_or_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="transcript.get")
+@_tool(name="transcript.get")
 def tool_transcript_get(
     url_or_id: str,
     mode: Literal["text", "timed", "chunked"] = "text",
@@ -94,7 +153,7 @@ def tool_transcript_get(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="scrape.search")
+@_tool(name="scrape.search")
 def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
     """Search YouTube via page scraping. No API key needed."""
     return _scrape_search(query, n)
@@ -105,7 +164,7 @@ def tool_scrape_search(query: str, n: int = 10) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="skeleton.build")
+@_tool(name="skeleton.build")
 def tool_skeleton_build(
     target: Literal["channel", "topic"],
     value: str,
@@ -118,19 +177,19 @@ def tool_skeleton_build(
     return _skeleton_build(target, value, limit)
 
 
-@mcp.tool(name="skeleton.list")
+@_tool(name="skeleton.list")
 def tool_skeleton_list(handle: str, enrich: bool = True) -> dict[str, Any]:
     """List the videos in a frozen skeleton/corpus revision."""
     return _skeleton_list(handle, enrich=enrich)
 
 
-@mcp.tool(name="skeleton.get")
+@_tool(name="skeleton.get")
 def tool_skeleton_get(handle: str) -> dict[str, Any]:
     """Load the full frozen snapshot and its capture/composition provenance."""
     return _skeleton_get(handle)
 
 
-@mcp.tool(name="skeleton.diff")
+@_tool(name="skeleton.diff")
 def tool_skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:
     """Compare two frozen revisions of the same channel or topic.
 
@@ -143,13 +202,13 @@ def tool_skeleton_diff(base_handle: str, head_handle: str) -> dict[str, Any]:
     return _skeleton_diff(base_handle, head_handle)
 
 
-@mcp.tool(name="skeleton.expire")
+@_tool(name="skeleton.expire")
 def tool_skeleton_expire(handle: str) -> dict[str, Any]:
     """Mark a frozen snapshot stale without deleting its membership."""
     return _skeleton_expire(handle)
 
 
-@mcp.tool(name="skeleton.index")
+@_tool(name="skeleton.index")
 def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
     """Discover frozen channel/topic/collection snapshots on disk."""
     return _skeleton_index(target)
@@ -160,7 +219,7 @@ def tool_skeleton_index(target: str | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="corpus.compose")
+@_tool(name="corpus.compose")
 def tool_corpus_compose(
     label: str,
     videos: list[str] | None = None,
@@ -178,7 +237,7 @@ def tool_corpus_compose(
     )
 
 
-@mcp.tool(name="corpus.hydrate")
+@_tool(name="corpus.hydrate")
 def tool_corpus_hydrate(
     handle: str,
     lang: str = "en",
@@ -209,7 +268,7 @@ def tool_corpus_hydrate(
     )
 
 
-@mcp.tool(name="corpus.prepare")
+@_tool(name="corpus.prepare")
 def tool_corpus_prepare(
     handle: str,
     lang: str = "en",
@@ -227,7 +286,7 @@ def tool_corpus_prepare(
     )
 
 
-@mcp.tool(name="corpus.search")
+@_tool(name="corpus.search")
 def tool_corpus_search(
     handle: str,
     query: str,
@@ -251,7 +310,7 @@ def tool_corpus_search(
     )
 
 
-@mcp.tool(name="corpus.visual_search")
+@_tool(name="corpus.visual_search")
 def tool_corpus_visual_search(
     handle: str,
     query: str,
@@ -271,7 +330,7 @@ def tool_corpus_visual_search(
     )
 
 
-@mcp.tool(name="corpus.clip_plan")
+@_tool(name="corpus.clip_plan")
 def tool_corpus_clip_plan(
     handle: str,
     query: str,
@@ -307,7 +366,7 @@ def tool_corpus_clip_plan(
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://evidence/frame/png/{sha256}",
     mime_type="image/png",
 )
@@ -316,7 +375,7 @@ def resource_visual_png(sha256: str) -> bytes:
     return visual_resources.read(sha256, "png")
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://evidence/frame/jpg/{sha256}",
     mime_type="image/jpeg",
 )
@@ -330,7 +389,7 @@ def resource_visual_jpg(sha256: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="frame.get")
+@_tool(name="frame.get")
 def tool_frame_get(
     url_or_id: str,
     mode: Literal["single", "sheet"] = "single",
@@ -352,7 +411,7 @@ def tool_frame_get(
     )
 
 
-@mcp.tool(name="audio.get")
+@_tool(name="audio.get")
 def tool_audio_get(
     url_or_id: str,
     fmt: Literal["wav", "m4a", "mp3", "flac", "ogg"] = "wav",
@@ -370,7 +429,7 @@ def tool_audio_get(
     )
 
 
-@mcp.tool(name="media.materialize")
+@_tool(name="media.materialize")
 def tool_media_materialize(
     plan_revision: str,
     max_height: Literal[360, 480, 720, 1080] = 720,
@@ -397,7 +456,7 @@ def tool_media_materialize(
 # template has a static MIME type so hosts can consume the artifact directly.
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/frame/png/{video_id}/{name}",
     mime_type="image/png",
 )
@@ -408,7 +467,7 @@ def resource_frame_png(video_id: str, name: str) -> bytes:
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/frame/jpg/{video_id}/{name}",
     mime_type="image/jpeg",
 )
@@ -419,7 +478,7 @@ def resource_frame_jpg(video_id: str, name: str) -> bytes:
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/audio/wav/{video_id}/{name}",
     mime_type="audio/wav",
 )
@@ -430,7 +489,7 @@ def resource_audio_wav(video_id: str, name: str) -> bytes:
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/audio/m4a/{video_id}/{name}",
     mime_type="audio/mp4",
 )
@@ -441,7 +500,7 @@ def resource_audio_m4a(video_id: str, name: str) -> bytes:
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/audio/mp3/{video_id}/{name}",
     mime_type="audio/mpeg",
 )
@@ -452,7 +511,7 @@ def resource_audio_mp3(video_id: str, name: str) -> bytes:
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/audio/flac/{video_id}/{name}",
     mime_type="audio/flac",
 )
@@ -463,7 +522,7 @@ def resource_audio_flac(video_id: str, name: str) -> bytes:
     )
 
 
-@mcp.resource(
+@_resource(
     "youtube-mcp://artifact/audio/ogg/{video_id}/{name}",
     mime_type="audio/ogg",
 )
@@ -479,7 +538,7 @@ def resource_audio_ogg(video_id: str, name: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="api.search")
+@_tool(name="api.search")
 def tool_api_search(
     query: str,
     max_results: int = 10,
@@ -491,13 +550,13 @@ def tool_api_search(
     return _api_search(query, max_results, order, published_after, channel_id)
 
 
-@mcp.tool(name="api.channel_stats")
+@_tool(name="api.channel_stats")
 def tool_api_channel_stats(channel_id_or_handle: str) -> dict[str, Any]:
     """Return channel statistics and canonical metadata."""
     return _api_channel_stats(channel_id_or_handle)
 
 
-@mcp.tool(name="api.trending")
+@_tool(name="api.trending")
 def tool_api_trending(
     region: str = "US",
     category_id: str | None = None,
@@ -507,7 +566,7 @@ def tool_api_trending(
     return _api_trending(region, category_id, n)
 
 
-@mcp.tool(name="api.video_categories")
+@_tool(name="api.video_categories")
 def tool_api_video_categories(region: str = "US") -> dict[str, Any]:
     """List YouTube category IDs for a region."""
     return _api_video_categories(region)
@@ -519,4 +578,5 @@ log.info(
     "corpus.{compose,hydrate,prepare,search,visual_search,clip_plan}, "
     "frame.get, audio.get, media.materialize | tier-2: "
     "api.{search,channel_stats,trending,video_categories} | binary media resources registered"
+    + (" | remote mode: local paths withheld, media.materialize disabled" if remote.remote_mode() else "")
 )
