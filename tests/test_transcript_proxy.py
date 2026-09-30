@@ -12,6 +12,7 @@ PROXY_ENV = [
     "YOUTUBE_TRANSCRIPT_WEBSHARE_USERNAME",
     "YOUTUBE_TRANSCRIPT_WEBSHARE_PASSWORD",
     "YOUTUBE_TRANSCRIPT_WEBSHARE_LOCATIONS",
+    "YOUTUBE_MCP_PROXY",
 ]
 
 
@@ -106,7 +107,10 @@ def test_build_client_passes_proxy_config_only_when_configured(monkeypatch) -> N
 
     monkeypatch.setattr(transcript_api, "YouTubeTranscriptApi", FakeApi)
     transcript_api._build_client()
-    assert calls == [{}]
+    # Every client gets a bounded-timeout session; proxy config only when set.
+    assert len(calls) == 1
+    assert set(calls[0]) == {"http_client"}
+    assert isinstance(calls[0].pop("http_client"), transcript_api._TimeoutSession)
 
     calls.clear()
     monkeypatch.setenv("YOUTUBE_TRANSCRIPT_PROXY", "http://proxy")
@@ -116,6 +120,7 @@ def test_build_client_passes_proxy_config_only_when_configured(monkeypatch) -> N
         lambda **kwargs: {"proxy": kwargs},
     )
     transcript_api._build_client()
+    assert isinstance(calls[0].pop("http_client"), transcript_api._TimeoutSession)
     assert calls == [
         {"proxy_config": {"proxy": {"http_url": "http://proxy", "https_url": "http://proxy"}}}
     ]

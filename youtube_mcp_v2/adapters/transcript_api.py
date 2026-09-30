@@ -3,6 +3,10 @@
 Returns timestamped segments plus resolved language/generated-caption metadata.
 Proxy settings are opt-in and namespaced to youtube-mcp-v2 so the server does not
 silently inherit unrelated process-wide proxy policy.
+
+Every HTTP request made by this adapter carries an explicit timeout
+(`YOUTUBE_TRANSCRIPT_TIMEOUT_S`, default 20s) so a stalled upstream cannot wedge
+the acquisition waterfall.
 """
 
 from __future__ import annotations
@@ -11,13 +15,31 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from requests import Session
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (  # noqa: F401  (re-exported)
+    AgeRestricted,
+    InvalidVideoId,
     NoTranscriptFound,
+    PoTokenRequired,
+    RequestBlocked,
     TranscriptsDisabled,
     VideoUnavailable,
+    VideoUnplayable,
+    YouTubeDataUnparsable,
 )
 from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
+
+
+class TranscriptConfigError(ValueError):
+    """Transcript adapter configuration is missing/conflicting.
+
+    Messages name the environment variable, never its value.
+    """
+
+
+class TranscriptPayloadError(RuntimeError):
+    """The caption provider returned a structurally unusable payload."""
 
 
 @dataclass
@@ -51,6 +73,13 @@ _ENV_HTTPS_PROXY = "YOUTUBE_TRANSCRIPT_HTTPS_PROXY"
 _ENV_WEBSHARE_USER = "YOUTUBE_TRANSCRIPT_WEBSHARE_USERNAME"
 _ENV_WEBSHARE_PASSWORD = "YOUTUBE_TRANSCRIPT_WEBSHARE_PASSWORD"
 _ENV_WEBSHARE_LOCATIONS = "YOUTUBE_TRANSCRIPT_WEBSHARE_LOCATIONS"
+# Shared default route for every acquisition path (native HTTP + yt-dlp). A
+# provider-specific setting always wins over the shared one.
+_ENV_SHARED_PROXY = "YOUTUBE_MCP_PROXY"
+_ENV_TIMEOUT = "YOUTUBE_TRANSCRIPT_TIMEOUT_S"
+
+DEFAULT_TIMEOUT_S = 20.0
+_MAX_TIMEOUT_S = 300.0
 
 
 def _env(name: str) -> str | None:
@@ -74,6 +103,9 @@ def proxy_settings_from_env() -> ProxySettings:
       YOUTUBE_TRANSCRIPT_WEBSHARE_PASSWORD=<password>
       YOUTUBE_TRANSCRIPT_WEBSHARE_LOCATIONS=us,de   # optional
 
+    Shared fallback (only used when no transcript-specific proxy is configured):
+      YOUTUBE_MCP_PROXY=<url>                     # also used by yt-dlp paths
+
     Generic and Webshare modes are mutually exclusive so routing is never
     ambiguous. The returned `summary` contains booleans/location codes only —
     never proxy URLs, usernames, or passwords.
@@ -95,13 +127,13 @@ def proxy_settings_from_env() -> ProxySettings:
     webshare_configured = bool(webshare_user or webshare_password or locations)
 
     if generic_configured and webshare_configured:
-        raise ValueError(
+        raise TranscriptConfigError(
             "configure either generic transcript proxy settings or Webshare, not both"
         )
 
     if webshare_configured:
         if not webshare_user or not webshare_password:
-            raise ValueError(
+            raise TranscriptConfigError(
                 "Webshare transcript proxy requires both username and password"
             )
         kwargs: dict[str, Any] = {
@@ -133,14 +165,61 @@ def proxy_settings_from_env() -> ProxySettings:
             },
         )
 
+    shared_proxy = _env(_ENV_SHARED_PROXY)
+    if shared_proxy:
+        return ProxySettings(
+            mode="generic",
+            config=GenericProxyConfig(http_url=shared_proxy, https_url=shared_proxy),
+            summary={
+                "mode": "generic",
+                "http_configured": True,
+                "https_configured": True,
+                "shared": True,
+            },
+        )
+
     return ProxySettings(mode="direct", config=None, summary={"mode": "direct"})
+
+
+def timeout_from_env() -> float:
+    """Per-request timeout for the native caption path, bounded to (0, 300]."""
+    raw = _env(_ENV_TIMEOUT)
+    if raw is None:
+        return DEFAULT_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise TranscriptConfigError(f"{_ENV_TIMEOUT} must be a number of seconds") from exc
+    if not 0 < value <= _MAX_TIMEOUT_S:
+        raise TranscriptConfigError(
+            f"{_ENV_TIMEOUT} must be > 0 and <= {int(_MAX_TIMEOUT_S)} seconds"
+        )
+    return value
+
+
+class _TimeoutSession(Session):
+    """requests.Session that applies a default timeout to every request.
+
+    youtube-transcript-api does not expose a timeout knob; without this a
+    stalled upstream connection could block the acquisition waterfall forever.
+    """
+
+    def __init__(self, timeout_s: float) -> None:
+        super().__init__()
+        self._default_timeout_s = timeout_s
+
+    def request(self, method, url, *args, **kwargs):  # type: ignore[override]
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self._default_timeout_s
+        return super().request(method, url, *args, **kwargs)
 
 
 def _build_client() -> YouTubeTranscriptApi:
     settings = proxy_settings_from_env()
+    session = _TimeoutSession(timeout_from_env())
     if settings.config is None:
-        return YouTubeTranscriptApi()
-    return YouTubeTranscriptApi(proxy_config=settings.config)
+        return YouTubeTranscriptApi(http_client=session)
+    return YouTubeTranscriptApi(proxy_config=settings.config, http_client=session)
 
 
 def fetch_transcript(video_id: str, lang: str = "en") -> TranscriptFetch:
@@ -179,10 +258,22 @@ def _to_fetch(
     fallback_lang: str,
     is_generated: bool | None = None,
 ) -> TranscriptFetch:
-    segs = [
-        Segment(start_s=float(s.start), duration_s=float(s.duration), text=s.text)
-        for s in result.snippets
-    ]
+    try:
+        segs = []
+        for snippet in result.snippets:
+            text = snippet.text
+            if not isinstance(text, str):
+                raise TypeError("snippet text is not a string")
+            segs.append(
+                Segment(
+                    start_s=float(snippet.start),
+                    duration_s=float(snippet.duration),
+                    text=text,
+                )
+            )
+    except (AttributeError, TypeError, ValueError) as exc:
+        # Do not forward the upstream exception text; it can echo raw payload.
+        raise TranscriptPayloadError("native caption payload was malformed") from exc
     lang = getattr(result, "language_code", None) or fallback_lang
     gen = (
         is_generated
